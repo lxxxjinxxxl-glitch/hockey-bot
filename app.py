@@ -5,24 +5,19 @@ from fastapi import FastAPI, Request
 app = FastAPI()
 
 TOKEN = "f9LHodD0cOK84NIrQMJHPRnik8266f6x7drNxJrLZ49v5-gGwdY9o0KJHBJNNudPUO-TyPkhZ5VkAO0Z9G9S"
-
 API_URL = "https://platform-api.max.ru/messages"
 
 
-# 🔥 ПРАВИЛЬНАЯ отправка по документации MAX
 def send_message(chat_id: int, text: str):
     headers = {
         "Authorization": TOKEN,
         "Content-Type": "application/json"
     }
 
+    # ✅ ЭТО РАБОЧИЙ ФОРМАТ (НЕ МЕНЯЕМ!)
     payload = {
-        "recipient": {
-            "chat_id": chat_id
-        },
-        "body": {
-            "text": text
-        }
+        "chat_id": chat_id,
+        "text": text
     }
 
     response = requests.post(API_URL, headers=headers, json=payload)
@@ -34,14 +29,11 @@ async def webhook(req: Request):
     data = await req.json()
     print("UPDATE:", data)
 
-    # 🔹 бот запущен
     if data.get("update_type") == "bot_started":
         chat_id = data.get("chat_id")
-
         print("BOT_STARTED:", chat_id)
         send_message(chat_id, "Бот запущен 🚀")
 
-    # 🔹 сообщение
     if data.get("update_type") == "message_created":
         msg = data["message"]
 
