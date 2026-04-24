@@ -1,41 +1,36 @@
 from fastapi import FastAPI, Request
 import requests
+
+from database import Base, engine
 from config import BOT_TOKEN
 
 app = FastAPI()
 
+Base.metadata.create_all(bind=engine)
+
+def send_message(chat_id, text):
+    url = "https://api.max.ru/sendMessage"
+
+    requests.post(url, json={
+        "chat_id": chat_id,
+        "text": text,
+        "token": BOT_TOKEN
+    })
 
 @app.get("/")
 def root():
     return {"status": "ok"}
 
-
-def send_message(chat_id, text):
-    """Отправляет сообщение пользователю через API MAX"""
-    url = f"https://max.ru/api/bots/{BOT_TOKEN}/sendMessage"
-
-    payload = {
-        "chat_id": chat_id,
-        "text": text
-    }
-
-    try:
-        response = requests.post(url, json=payload)
-        print(f"Отправка сообщения: {response.status_code}, {response.text}")
-    except Exception as e:
-        print(f"Ошибка при отправке сообщения: {e}")
-
-
-@app.post("/webhook")
+"/webhook"  # ← ВОТ ЭТО ВАЖНО
 async def webhook(request: Request):
     data = await request.json()
-    print(f"Получены данные: {data}")
+    print(data)
 
     if "message" in data:
         chat_id = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
         if text == "/start":
-            send_message(chat_id, "Бот работает 👍")
+            send_message(chat_id, "Бот работает на сервере 🚀")
 
     return {"ok": True}
