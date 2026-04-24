@@ -10,7 +10,7 @@ app = FastAPI()
 Base.metadata.create_all(bind=engine)
 
 # ❗ ТВОЙ ТОКЕН
-TOKEN = "ТВОЙ_РЕАЛЬНЫЙ_ТОКЕН"
+TOKEN = "f9LHodD0cOK84NIrQMJHPRnik8266f6x7drNxJrLZ49v5-gGwdY9o0KJHBJNNudPUO-TyPkhZ5VkAO0Z9G9S"
 
 API_URL = "https://platform-api.max.ru/messages"
 
