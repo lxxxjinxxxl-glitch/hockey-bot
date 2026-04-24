@@ -1,13 +1,17 @@
 from fastapi import FastAPI, Request
 import requests
+import os
+
+from database import Base, engine
 from config import BOT_TOKEN
 
 app = FastAPI()
 
+Base.metadata.create_all(bind=engine)
+
 print("CONFIG TOKEN:", BOT_TOKEN)
 
 
-# ✅ отправка сообщения (RAW API MAX)
 def send_message(chat_id, text):
     url = "https://platform-api.max.ru/messages"
 
@@ -18,18 +22,16 @@ def send_message(chat_id, text):
 
     data = {
         "recipient": {
-            "chat_id": int(chat_id)
+            "chat_id": chat_id
         },
         "message": {
             "text": text
         }
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=data)
-        print("SEND:", response.status_code, response.text)
-    except Exception as e:
-        print("ERROR SEND:", e)
+    response = requests.post(url, headers=headers, json=data)
+
+    print("SEND:", response.status_code, response.text)
 
 
 @app.get("/")
@@ -42,14 +44,14 @@ async def webhook(request: Request):
     data = await request.json()
     print("UPDATE:", data)
 
-    # 🔹 пользователь открыл бота
+    # бот запущен
     if data.get("update_type") == "bot_started":
         chat_id = data.get("chat_id")
         print("BOT_STARTED:", chat_id)
 
         send_message(chat_id, "Бот запущен 🚀")
 
-    # 🔹 пользователь написал сообщение
+    # сообщение
     if data.get("update_type") == "message_created":
         message = data.get("message", {})
 
