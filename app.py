@@ -44,3 +44,48 @@ async def webhook(request: Request):
             send_message(chat_id, f"Ты написал: {text}")
 
     return {"ok": True}
+
+
+from fastapi import FastAPI, Request
+import requests
+
+from database import Base, engine
+from config import BOT_TOKEN
+
+app = FastAPI()
+
+Base.metadata.create_all(bind=engine)
+
+def send_message(chat_id, text):
+    url = "https://platform-api.max.ru/messages"
+
+    headers = {
+        "Authorization": BOT_TOKEN
+    }
+
+    data = {
+        "chat_id": chat_id,
+        "text": text
+    }
+
+    requests.post(url, headers=headers, json=data)
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+# ❗ ВАЖНО — вот это главное
+"/webhook"
+async def webhook(request: Request):
+    data = await request.json()
+    print("UPDATE:", data)
+
+    # MAX может присылать разные типы событий
+    if "message" in data:
+        chat_id = data["message"]["chat_id"]
+        text = data["message"].get("text", "")
+
+        if text == "/start":
+            send_message(chat_id, "Бот работает 🚀")
+
+    return {"ok": True}
