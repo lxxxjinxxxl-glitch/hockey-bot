@@ -28,7 +28,7 @@ def root():
     return {"status": "ok"}
 
 # ✅ ВОТ ЭТО ГЛАВНОЕ
-"/webhook"
+@app.post ("/webhook")
 async def webhook(request: Request):
     data = await request.json()
     print("UPDATE:", data)
