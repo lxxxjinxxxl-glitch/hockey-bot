@@ -6,7 +6,6 @@ from config import BOT_TOKEN
 
 app = FastAPI()
 
-# создаём таблицы
 Base.metadata.create_all(bind=engine)
 
 
@@ -23,8 +22,8 @@ def send_message(chat_id, text):
         "text": text
     }
 
-    response = requests.post(url, headers=headers, json=data)
-    print("SEND:", response.status_code, response.text)
+    r = requests.post(url, headers=headers, json=data)
+    print("SEND:", r.status_code, r.text)
 
 
 @app.get("/")
@@ -32,24 +31,24 @@ def root():
     return {"status": "ok"}
 
 
-# 🔥 ГЛАВНЫЙ WEBHOOK
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
     print("UPDATE:", data)
 
-    # ✅ запуск бота (через диплинк)
+    # 🚀 запуск бота
     if data.get("update_type") == "bot_started":
         chat_id = data.get("chat_id")
         send_message(chat_id, "Бот запущен 🚀")
-        return {"ok": True}
 
-    # ✅ универсальная обработка сообщений
-    message = data.get("message")
+    # 💬 сообщение
+    if data.get("update_type") == "message_created":
+        message = data.get("message", {})
 
-    if message:
-        chat_id = message.get("chat_id")
-        text = message.get("text", "")
+        chat_id = message.get("recipient", {}).get("chat_id")
+        text = message.get("body", {}).get("text", "")
+
+        print("TEXT:", text)
 
         if text == "/start":
             send_message(chat_id, "Бот работает 🚀")

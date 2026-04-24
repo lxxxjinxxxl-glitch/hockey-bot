@@ -9,7 +9,11 @@ headers = {
 }
 
 data = {
-    "url": "https://hockey-bot-production.up.railway.app/webhook"
+    "url": "https://hockey-bot-production.up.railway.app/webhook",
+    "update_types": [
+        "message_created",
+        "bot_started"
+    ]
 }
 
 response = requests.post(url, headers=headers, json=data)
