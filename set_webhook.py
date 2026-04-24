@@ -1,11 +1,10 @@
 import requests
-
-TOKEN = "f9LHodD0cOK84NIrQMJHPRnik8266f6x7drNxJrLZ49v5-gGwdY9o0KJHBJNNudPUO-TyPkhZ5VkAO0Z9G9S"
+from config import BOT_TOKEN
 
 url = "https://platform-api.max.ru/subscriptions"
 
 headers = {
-    "Authorization": TOKEN,
+    "Authorization": BOT_TOKEN,
     "Content-Type": "application/json"
 }
 
