@@ -51,7 +51,8 @@ async def webhook(request: Request):
     if data.get("update_type") == "message_created":
         message = data.get("message", {})
 
-        user_id = message.get("sender", {}).get("user_id")
+        # ❗ ВАЖНО — берем recipient.user_id
+        user_id = message.get("recipient", {}).get("user_id")
         text = message.get("body", {}).get("text", "")
 
         print("USER_ID:", user_id)
