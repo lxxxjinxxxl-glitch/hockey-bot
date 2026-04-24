@@ -9,18 +9,34 @@ app = FastAPI()
 # создаем таблицы
 Base.metadata.create_all(bind=engine)
 
-TOKEN = "f9LHodD0cOK84NIrQMJHPRnik8266f6x7drNxJrLZ49v5-gGwdY9o0KJHBJNNudPUO-TyPkhZ5VkAO0Z9G9S"
+# ❗ ТВОЙ ТОКЕН
+TOKEN = "ТВОЙ_РЕАЛЬНЫЙ_ТОКЕН"
+
 API_URL = "https://platform-api.max.ru/messages"
 
-# 👇 состояние пользователей (FSM)
+# состояния пользователей (FSM)
 user_states = {}
 
-# 👇 список админов (тренеров)
-ADMINS = [125743856]  # ← вставь свой user_id
+# админы (тренеры)
+ADMINS = [125743856]  # ← твой user_id
+
+# варианты
+PLACES = {
+    "1": "ЛДС Олимпийский",
+    "2": "ЛДС Айсберг",
+    "3": "ЛДС Десант"
+}
+
+DIRECTIONS = {
+    "1": "Техника владения клюшкой",
+    "2": "Техника катания",
+    "3": "Техника броска",
+    "4": "ОФП"
+}
 
 
 # =========================
-# ОТПРАВКА СООБЩЕНИЯ (НЕ ТРОГАЕМ!)
+# ОТПРАВКА СООБЩЕНИЯ
 # =========================
 def send_message(user_id: int, text: str):
     headers = {
@@ -30,10 +46,12 @@ def send_message(user_id: int, text: str):
 
     url = f"{API_URL}?user_id={user_id}"
 
-    payload = {"text": text}
+    payload = {
+        "text": text
+    }
 
-    r = requests.post(url, headers=headers, json=payload)
-    print("SEND:", r.status_code, r.text)
+    response = requests.post(url, headers=headers, json=payload)
+    print("SEND:", response.status_code, response.text)
 
 
 # =========================
@@ -51,21 +69,23 @@ async def webhook(req: Request):
     user_id = msg["sender"]["user_id"]
     text = msg["body"].get("text", "")
 
+    print("TEXT:", text)
+
     db = SessionLocal()
 
     # =========================
-    # СТАРТ
+    # /start
     # =========================
-    if text == "/start":
+    if text.lower() == "/start":
         send_message(user_id, "Бот для записи на хоккей 🏒")
 
         if user_id in ADMINS:
-            send_message(user_id, "Ты тренер. Команда: /add")
+            send_message(user_id, "Ты тренер.\nКоманда: /add")
 
         return {"ok": True}
 
     # =========================
-    # СОЗДАНИЕ ТРЕНИРОВКИ (ШАГ 1)
+    # СОЗДАНИЕ ТРЕНИРОВКИ
     # =========================
     if text == "/add" and user_id in ADMINS:
         user_states[user_id] = {"step": 1}
@@ -73,42 +93,108 @@ async def webhook(req: Request):
         return {"ok": True}
 
     # =========================
-    # FSM (ПОШАГОВО)
+    # FSM (ШАГИ)
     # =========================
     if user_id in user_states:
         state = user_states[user_id]
 
         try:
+            # ШАГ 1 — дата
             if state["step"] == 1:
                 state["datetime"] = text
                 state["step"] = 2
-                send_message(user_id, "Место:")
+
+                send_message(
+                    user_id,
+                    "Выбери место:\n"
+                    "1. Олимпийский\n"
+                    "2. Айсберг\n"
+                    "3. Десант\n"
+                    "4. Свой вариант"
+                )
                 return {"ok": True}
 
+            # ШАГ 2 — место
             elif state["step"] == 2:
+                if text in PLACES:
+                    state["place"] = PLACES[text]
+                    state["step"] = 3
+
+                    send_message(
+                        user_id,
+                        "Выбери направление:\n"
+                        "1. Клюшка\n"
+                        "2. Катание\n"
+                        "3. Бросок\n"
+                        "4. ОФП\n"
+                        "5. Свой вариант"
+                    )
+                    return {"ok": True}
+
+                elif text == "4":
+                    state["step"] = "custom_place"
+                    send_message(user_id, "Напиши свое место:")
+                    return {"ok": True}
+
+                else:
+                    send_message(user_id, "Выбери цифру 1-4")
+                    return {"ok": True}
+
+            # свое место
+            elif state["step"] == "custom_place":
                 state["place"] = text
                 state["step"] = 3
-                send_message(user_id, "Направление:")
+
+                send_message(
+                    user_id,
+                    "Выбери направление:\n"
+                    "1. Клюшка\n"
+                    "2. Катание\n"
+                    "3. Бросок\n"
+                    "4. ОФП\n"
+                    "5. Свой вариант"
+                )
                 return {"ok": True}
 
+            # направление
             elif state["step"] == 3:
+                if text in DIRECTIONS:
+                    state["direction"] = DIRECTIONS[text]
+                    state["step"] = 4
+                    send_message(user_id, "Тренеры (через запятую):")
+                    return {"ok": True}
+
+                elif text == "5":
+                    state["step"] = "custom_direction"
+                    send_message(user_id, "Напиши направление:")
+                    return {"ok": True}
+
+                else:
+                    send_message(user_id, "Выбери цифру 1-5")
+                    return {"ok": True}
+
+            # свое направление
+            elif state["step"] == "custom_direction":
                 state["direction"] = text
                 state["step"] = 4
                 send_message(user_id, "Тренеры:")
                 return {"ok": True}
 
+            # тренеры
             elif state["step"] == 4:
                 state["coaches"] = text
                 state["step"] = 5
                 send_message(user_id, "Макс участников:")
                 return {"ok": True}
 
+            # макс слоты
             elif state["step"] == 5:
                 state["max_slots"] = int(text)
                 state["step"] = 6
                 send_message(user_id, "Цена:")
                 return {"ok": True}
 
+            # финал
             elif state["step"] == 6:
                 state["price"] = int(text)
 
@@ -124,14 +210,22 @@ async def webhook(req: Request):
                 db.add(training)
                 db.commit()
 
-                send_message(user_id, "Тренировка создана ✅")
+                send_message(
+                    user_id,
+                    f"Тренировка создана ✅\n\n"
+                    f"{state['datetime']}\n"
+                    f"{state['place']}\n"
+                    f"{state['direction']}\n"
+                    f"{state['coaches']}\n"
+                    f"{state['price']} руб"
+                )
 
                 del user_states[user_id]
                 return {"ok": True}
 
         except Exception as e:
             print("ERROR:", e)
-            send_message(user_id, "Ошибка ❌")
+            send_message(user_id, "Ошибка при создании ❌")
             del user_states[user_id]
             return {"ok": True}
 
@@ -202,7 +296,6 @@ async def webhook(req: Request):
 
         send_message(user_id, "Ты отказался ❌")
 
-        # берем первого из очереди
         waiting = db.query(Booking).filter_by(
             training_id=training.id,
             status="waiting"
@@ -212,7 +305,7 @@ async def webhook(req: Request):
             waiting.status = "active"
             db.commit()
 
-            send_message(waiting.user_id, "Ты попал в основной состав ✅")
+            send_message(waiting.user_id, "Ты попал в состав ✅")
 
         return {"ok": True}
 
