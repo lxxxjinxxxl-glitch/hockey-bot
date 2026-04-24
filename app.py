@@ -17,14 +17,12 @@ def send_message(chat_id, text):
         "Content-Type": "application/json"
     }
 
-    # ✅ ПРАВИЛЬНЫЙ ФОРМАТ ДЛЯ MAX
+    # ✅ ВАЖНО — правильный формат MAX
     data = {
         "recipient": {
             "chat_id": chat_id
         },
-        "message": {
-            "text": text
-        }
+        "text": text
     }
 
     r = requests.post(url, headers=headers, json=data)
@@ -44,8 +42,7 @@ async def webhook(request: Request):
     # 🚀 запуск бота
     if data.get("update_type") == "bot_started":
         chat_id = data.get("chat_id")
-
-        print("BOT_STARTED chat_id:", chat_id)
+        print("BOT_STARTED:", chat_id)
 
         if chat_id:
             send_message(chat_id, "Бот запущен 🚀")
