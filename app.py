@@ -1,20 +1,27 @@
 import requests
 from fastapi import FastAPI, Request
 
-# БАЗА
 from database import SessionLocal, engine, Base
-import models
+from models import Training, Booking
+
+app = FastAPI()
 
 # создаем таблицы
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI()
-
 TOKEN = "f9LHodD0cOK84NIrQMJHPRnik8266f6x7drNxJrLZ49v5-gGwdY9o0KJHBJNNudPUO-TyPkhZ5VkAO0Z9G9S"
 API_URL = "https://platform-api.max.ru/messages"
 
+# 👇 состояние пользователей (FSM)
+user_states = {}
 
-# ✅ РАБОЧАЯ ОТПРАВКА (НЕ ТРОГАТЬ)
+# 👇 список админов (тренеров)
+ADMINS = [125743856]  # ← вставь свой user_id
+
+
+# =========================
+# ОТПРАВКА СООБЩЕНИЯ (НЕ ТРОГАЕМ!)
+# =========================
 def send_message(user_id: int, text: str):
     headers = {
         "Authorization": TOKEN,
@@ -23,66 +30,95 @@ def send_message(user_id: int, text: str):
 
     url = f"{API_URL}?user_id={user_id}"
 
-    payload = {
-        "text": text
-    }
+    payload = {"text": text}
 
-    response = requests.post(url, headers=headers, json=payload)
-    print("SEND:", response.status_code, response.text)
+    r = requests.post(url, headers=headers, json=payload)
+    print("SEND:", r.status_code, r.text)
 
 
-# ==============================
-# 🔥 ОСНОВНОЙ ВЕБХУК
-# ==============================
+# =========================
+# WEBHOOK
+# =========================
 @app.post("/webhook")
 async def webhook(req: Request):
     data = await req.json()
     print("UPDATE:", data)
 
+    if data.get("update_type") != "message_created":
+        return {"ok": True}
+
+    msg = data["message"]
+    user_id = msg["sender"]["user_id"]
+    text = msg["body"].get("text", "")
+
     db = SessionLocal()
 
     # =========================
-    # 🚀 СТАРТ
+    # СТАРТ
     # =========================
-    if data.get("update_type") == "bot_started":
-        user_id = data["user"]["user_id"]
+    if text == "/start":
+        send_message(user_id, "Бот для записи на хоккей 🏒")
 
-        send_message(user_id, "Бот запущен 🚀")
+        if user_id in ADMINS:
+            send_message(user_id, "Ты тренер. Команда: /add")
+
+        return {"ok": True}
 
     # =========================
-    # 💬 СООБЩЕНИЯ
+    # СОЗДАНИЕ ТРЕНИРОВКИ (ШАГ 1)
     # =========================
-    if data.get("update_type") == "message_created":
-        msg = data["message"]
+    if text == "/add" and user_id in ADMINS:
+        user_states[user_id] = {"step": 1}
+        send_message(user_id, "Введи дату и время:")
+        return {"ok": True}
 
-        text = msg["body"].get("text", "")
-        user_id = msg["sender"]["user_id"]
+    # =========================
+    # FSM (ПОШАГОВО)
+    # =========================
+    if user_id in user_states:
+        state = user_states[user_id]
 
-        print("TEXT:", text)
+        try:
+            if state["step"] == 1:
+                state["datetime"] = text
+                state["step"] = 2
+                send_message(user_id, "Место:")
+                return {"ok": True}
 
-        # =====================
-        # /start
-        # =====================
-        if text == "/start":
-            send_message(user_id, "Привет! Я бот для записи на хоккей 🏒")
+            elif state["step"] == 2:
+                state["place"] = text
+                state["step"] = 3
+                send_message(user_id, "Направление:")
+                return {"ok": True}
 
-        # =====================
-        # /add — создать тренировку
-        # =====================
-        elif text.startswith("/add"):
-            try:
-                # формат:
-                # /add Дата|Место|Направление|Тренеры|Макс|Цена
+            elif state["step"] == 3:
+                state["direction"] = text
+                state["step"] = 4
+                send_message(user_id, "Тренеры:")
+                return {"ok": True}
 
-                parts = text.replace("/add ", "").split("|")
+            elif state["step"] == 4:
+                state["coaches"] = text
+                state["step"] = 5
+                send_message(user_id, "Макс участников:")
+                return {"ok": True}
 
-                training = models.Training(
-                    datetime=parts[0],
-                    place=parts[1],
-                    direction=parts[2],
-                    coaches=parts[3],
-                    max_slots=int(parts[4]),
-                    price=int(parts[5])
+            elif state["step"] == 5:
+                state["max_slots"] = int(text)
+                state["step"] = 6
+                send_message(user_id, "Цена:")
+                return {"ok": True}
+
+            elif state["step"] == 6:
+                state["price"] = int(text)
+
+                training = Training(
+                    datetime=state["datetime"],
+                    place=state["place"],
+                    direction=state["direction"],
+                    coaches=state["coaches"],
+                    max_slots=state["max_slots"],
+                    price=state["price"]
                 )
 
                 db.add(training)
@@ -90,77 +126,94 @@ async def webhook(req: Request):
 
                 send_message(user_id, "Тренировка создана ✅")
 
-            except Exception as e:
-                print("ERROR:", e)
-                send_message(user_id, "Ошибка при создании тренировки ❌")
+                del user_states[user_id]
+                return {"ok": True}
 
-        # =====================
-        # /list — список
-        # =====================
-        elif text == "/list":
-            trainings = db.query(models.Training).all()
+        except Exception as e:
+            print("ERROR:", e)
+            send_message(user_id, "Ошибка ❌")
+            del user_states[user_id]
+            return {"ok": True}
 
-            if not trainings:
-                send_message(user_id, "Тренировок нет")
-            else:
-                result = ""
+    # =========================
+    # ЗАПИСЬ
+    # =========================
+    if text.startswith("/join"):
+        parts = text.split()
 
-                for t in trainings:
-                    result += (
-                        f"\nID: {t.id}\n"
-                        f"{t.datetime}\n"
-                        f"{t.place}\n"
-                        f"{t.direction}\n"
-                        f"Тренеры: {t.coaches}\n"
-                        f"Мест: {t.max_slots}\n"
-                        f"Цена: {t.price}₽\n"
-                        f"------\n"
-                    )
+        if len(parts) < 2:
+            send_message(user_id, "Формат: /join Иванов")
+            return {"ok": True}
 
-                send_message(user_id, result)
+        name = parts[1]
 
-        # =====================
-        # /join
-        # =====================
-        elif text.startswith("/join"):
-            try:
-                parts = text.split(" ")
+        training = db.query(Training).order_by(Training.id.desc()).first()
 
-                training_id = int(parts[1])
-                name = parts[2]
+        if not training:
+            send_message(user_id, "Нет тренировок")
+            return {"ok": True}
 
-                bookings = db.query(models.Booking).filter(
-                    models.Booking.training_id == training_id
-                ).all()
+        active = db.query(Booking).filter_by(
+            training_id=training.id,
+            status="active"
+        ).count()
 
-                training = db.query(models.Training).filter(
-                    models.Training.id == training_id
-                ).first()
-
-                if len(bookings) < training.max_slots:
-                    booking = models.Booking(
-                        training_id=training_id,
-                        user_id=user_id,
-                        name=name
-                    )
-
-                    db.add(booking)
-                    db.commit()
-
-                    send_message(user_id, "Ты записан ✅")
-                else:
-                    position = len(bookings) - training.max_slots + 1
-                    send_message(user_id, f"Ты в очереди. Место: {position}")
-
-            except Exception as e:
-                print("ERROR:", e)
-                send_message(user_id, "Ошибка записи ❌")
-
-        # =====================
-        # любое сообщение
-        # =====================
+        if active < training.max_slots:
+            status = "active"
+            send_message(user_id, "Ты записан ✅")
         else:
-            send_message(user_id, f"Ты написал: {text}")
+            status = "waiting"
+            queue_pos = db.query(Booking).filter_by(
+                training_id=training.id,
+                status="waiting"
+            ).count() + 1
 
-    db.close()
+            send_message(user_id, f"Ты в очереди №{queue_pos}")
+
+        booking = Booking(
+            training_id=training.id,
+            user_id=user_id,
+            name=name,
+            status=status
+        )
+
+        db.add(booking)
+        db.commit()
+
+        return {"ok": True}
+
+    # =========================
+    # ОТКАЗ
+    # =========================
+    if text == "/leave":
+        training = db.query(Training).order_by(Training.id.desc()).first()
+
+        booking = db.query(Booking).filter_by(
+            training_id=training.id,
+            user_id=user_id
+        ).first()
+
+        if not booking:
+            send_message(user_id, "Ты не записан")
+            return {"ok": True}
+
+        db.delete(booking)
+        db.commit()
+
+        send_message(user_id, "Ты отказался ❌")
+
+        # берем первого из очереди
+        waiting = db.query(Booking).filter_by(
+            training_id=training.id,
+            status="waiting"
+        ).first()
+
+        if waiting:
+            waiting.status = "active"
+            db.commit()
+
+            send_message(waiting.user_id, "Ты попал в основной состав ✅")
+
+        return {"ok": True}
+
     return {"ok": True}
