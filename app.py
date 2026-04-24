@@ -7,7 +7,7 @@ app = FastAPI()
 print("CONFIG TOKEN:", BOT_TOKEN)
 
 
-# ✅ ПРАВИЛЬНАЯ ОТПРАВКА
+# ✅ отправка сообщения (ПРАВИЛЬНЫЙ RAW API)
 def send_message(chat_id, text):
     url = "https://platform-api.max.ru/messages"
 
@@ -39,14 +39,14 @@ async def webhook(request: Request):
     data = await request.json()
     print("UPDATE:", data)
 
-    # 📌 бот старт
+    # 🔹 когда пользователь открыл бота
     if data.get("update_type") == "bot_started":
         chat_id = data.get("chat_id")
         print("BOT_STARTED:", chat_id)
 
         send_message(chat_id, "Бот запущен 🚀")
 
-    # 📌 сообщение
+    # 🔹 когда пришло сообщение
     if data.get("update_type") == "message_created":
         message = data.get("message", {})
 
