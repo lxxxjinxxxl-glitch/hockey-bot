@@ -3,7 +3,7 @@ import json
 from fastapi import FastAPI, Request
 
 from database import init_db, SessionLocal, Training, Registration
-from keyboards import main_menu, training_inline_buttons
+from keyboards import training_inline_buttons
 from config import BOT_TOKEN, API_URL, GROUP_CHAT_ID, TRAINER_IDS
 
 init_db()
@@ -27,15 +27,15 @@ DIRECTIONS = {
 }
 
 
-def send_message(user_id: int, text: str, keyboard=None):
+def send_message(user_id: int, text: str, inline_keyboard=None):
     headers = {
         "Authorization": BOT_TOKEN,
         "Content-Type": "application/json"
     }
     url = f"{API_URL}?user_id={user_id}"
     payload = {"text": text}
-    if keyboard:
-        payload["keyboard"] = json.dumps(keyboard)
+    if inline_keyboard:
+        payload["attachments"] = inline_keyboard["attachments"]
 
     r = requests.post(url, headers=headers, json=payload)
     print("SEND:", r.status_code, r.text)
@@ -172,8 +172,10 @@ async def webhook(req: Request):
 
     if text == "/start":
         trainer = is_trainer(user_id)
-        kb = main_menu(trainer)
-        send_message(user_id, "Привет! Я бот для записи на тренировки 🏒", kb)
+        if trainer:
+            send_message(user_id, "Привет, тренер! 🏒\n\n/add — создать тренировку\n/list — список тренировок")
+        else:
+            send_message(user_id, "Привет! Я бот для записи на тренировки 🏒\n\n/list — список тренировок")
         return {"ok": True}
 
     if text == "/list":
@@ -188,7 +190,7 @@ async def webhook(req: Request):
         send_message(user_id, result)
         return {"ok": True}
 
-    if text == "➕ Создать тренировку":
+    if text == "/add" or text == "➕ Создать тренировку":
         if not is_trainer(user_id):
             send_message(user_id, "Только для тренеров")
             return {"ok": True}

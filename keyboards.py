@@ -1,30 +1,37 @@
 def main_menu(is_trainer: bool):
-    if is_trainer:
-        return {
-            "keyboard": [
-                [{"text": "➕ Создать тренировку"}],
-                [{"text": "📋 Мои тренировки"}],
-            ],
-            "resize_keyboard": True
-        }
-    else:
-        return {
-            "keyboard": [
-                [{"text": "📝 Мои записи"}],
-            ],
-            "resize_keyboard": True
-        }
+    """Reply-клавиатура для лички (пока без неё — только текст)"""
+    return None  # reply-клавиатуру пока не используем
 
 
 def training_inline_buttons(training_id: int):
+    """Inline-кнопки для поста в чате"""
     return {
-        "inline_keyboard": [
-            [
-                {"text": "✅ Записаться", "callback_data": f"join_{training_id}"},
-                {"text": "👥 Кто идёт?", "callback_data": f"list_{training_id}"},
-            ],
-            [
-                {"text": "❌ Отказаться", "callback_data": f"leave_{training_id}"},
-            ]
+        "attachments": [
+            {
+                "type": "inline_keyboard",
+                "payload": {
+                    "buttons": [
+                        [
+                            {
+                                "type": "callback",
+                                "text": "✅ Записаться",
+                                "payload": f"join_{training_id}"
+                            },
+                            {
+                                "type": "callback",
+                                "text": "👥 Кто идёт?",
+                                "payload": f"list_{training_id}"
+                            }
+                        ],
+                        [
+                            {
+                                "type": "callback",
+                                "text": "❌ Отказаться",
+                                "payload": f"leave_{training_id}"
+                            }
+                        ]
+                    ]
+                }
+            }
         ]
     }
