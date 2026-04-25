@@ -268,10 +268,9 @@ async def webhook(req: Request):
                 send_message(user_id, "ℹ️ Доп. информация (возраст и т.д.) или напиши «—» если нет:")
 
             # Шаг: доп.информация (НЕОБЯЗАТЕЛЬНО)
-            elif step == "extra":
+              elif step == "extra":
                 state["extra"] = "" if text in ("-", "—", "нет", "пропустить") else text
 
-                # Сохраняем в БД
                 training = Training(
                     date=state["date"],
                     time=f"{state['time_start']}-{state['time_end']}",
@@ -288,34 +287,36 @@ async def webhook(req: Request):
 
                 # Текст поста
                 post = (
-                    f"🏒 **НОВАЯ ТРЕНИРОВКА**\n"
+                    f"🏒 НОВАЯ ТРЕНИРОВКА\n"
                     f"📅 {state['date']}\n"
                     f"🕐 {state['time_start']} — {state['time_end']}\n"
                     f"📍 {state['place']}\n"
                     f"🎯 {state['direction']}\n"
                     f"👤 Тренер: {state['coaches']}\n"
                     f"👥 Мест: {state['max_slots']}\n"
-                    f"💰 {state['price']} руб.\n"
-                    f"ℹ️ {state['extra']}"
+                    f"💰 {state['price']} руб."
                 )
+                if state["extra"]:
+                    post += f"\nℹ️ {state['extra']}"
 
                 kb = training_inline_buttons(training.id)
-                resp = send_message(GROUP_CHAT_ID, post, kb)
+                print(f"DEBUG: sending to GROUP_CHAT_ID={GROUP_CHAT_ID}")
+                print(f"DEBUG: kb={json.dumps(kb, ensure_ascii=False)}")
 
-                msg_id = resp.get("message", {}).get("message_id")
-                if msg_id:
-                    training.group_msg_id = str(msg_id)
-                    db.commit()
+                resp = send_message(GROUP_CHAT_ID, post, kb)
+                print(f"DEBUG: resp type={type(resp)}, resp={json.dumps(resp, ensure_ascii=False)[:300]}")
+
+                # Пробуем достать message_id
+                if isinstance(resp, dict):
+                    msg_id = resp.get("message", {}).get("message_id")
+                    if msg_id:
+                        training.group_msg_id = str(msg_id)
+                        db.commit()
+                        print(f"DEBUG: saved msg_id={msg_id}")
+                    else:
+                        print(f"DEBUG: no message_id in response")
+                else:
+                    print(f"DEBUG: resp is not dict, it's {type(resp)}")
 
                 send_message(user_id, "✅ Тренировка создана и опубликована в чате!")
                 del user_states[user_id]
-
-        except Exception as e:
-            print(f"FSM ERROR: {type(e).__name__}: {e}")
-            send_message(user_id, f"❌ Ошибка: {e}")
-            if user_id in user_states:
-                del user_states[user_id]
-
-        return {"ok": True}
-
-    return {"ok": True}
