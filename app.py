@@ -38,8 +38,12 @@ def send_message(user_id: int, text: str, inline_keyboard=None):
         payload["attachments"] = inline_keyboard["attachments"]
 
     r = requests.post(url, headers=headers, json=payload)
-    print("SEND:", r.status_code, r.text)
-    return r.json()
+    print("SEND:", r.status_code)
+    try:
+        return r.json()
+    except:
+        print("SEND RAW:", r.text[:300])
+        return {"ok": False, "text": r.text}
 
 
 def is_trainer(user_id: int) -> bool:
@@ -267,8 +271,8 @@ async def webhook(req: Request):
                 state["step"] = "extra"
                 send_message(user_id, "ℹ️ Доп. информация (возраст и т.д.) или напиши «—» если нет:")
 
-            # Шаг: доп.информация (НЕОБЯЗАТЕЛЬНО)
-              elif step == "extra":
+            # Шаг: доп.информация
+            elif step == "extra":
                 state["extra"] = "" if text in ("-", "—", "нет", "пропустить") else text
 
                 training = Training(
@@ -285,7 +289,6 @@ async def webhook(req: Request):
                 db.add(training)
                 db.commit()
 
-                # Текст поста
                 post = (
                     f"🏒 НОВАЯ ТРЕНИРОВКА\n"
                     f"📅 {state['date']}\n"
@@ -306,17 +309,22 @@ async def webhook(req: Request):
                 resp = send_message(GROUP_CHAT_ID, post, kb)
                 print(f"DEBUG: resp type={type(resp)}, resp={json.dumps(resp, ensure_ascii=False)[:300]}")
 
-                # Пробуем достать message_id
                 if isinstance(resp, dict):
                     msg_id = resp.get("message", {}).get("message_id")
                     if msg_id:
                         training.group_msg_id = str(msg_id)
                         db.commit()
                         print(f"DEBUG: saved msg_id={msg_id}")
-                    else:
-                        print(f"DEBUG: no message_id in response")
-                else:
-                    print(f"DEBUG: resp is not dict, it's {type(resp)}")
 
                 send_message(user_id, "✅ Тренировка создана и опубликована в чате!")
                 del user_states[user_id]
+
+        except Exception as e:
+            print(f"FSM ERROR: {type(e).__name__}: {e}")
+            send_message(user_id, f"❌ Ошибка: {e}")
+            if user_id in user_states:
+                del user_states[user_id]
+
+        return {"ok": True}
+
+    return {"ok": True}
