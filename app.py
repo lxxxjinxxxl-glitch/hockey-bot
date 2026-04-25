@@ -27,18 +27,24 @@ DIRECTIONS = {
 }
 
 
-def send_message(user_id: int, text: str, inline_keyboard=None):
+def send_message(target_id: int, text: str, inline_keyboard=None):
     headers = {
         "Authorization": BOT_TOKEN,
         "Content-Type": "application/json"
     }
-    url = f"{API_URL}?user_id={user_id}"
+    
+    # Если ID отрицательный — это чат, используем chat_id
+    if target_id < 0:
+        url = f"{API_URL}?chat_id={target_id}"
+    else:
+        url = f"{API_URL}?user_id={target_id}"
+    
     payload = {"text": text}
     if inline_keyboard:
         payload["attachments"] = inline_keyboard["attachments"]
 
     r = requests.post(url, headers=headers, json=payload)
-    print("SEND:", r.status_code)
+    print(f"SEND to {target_id}: {r.status_code}")
     try:
         return r.json()
     except:
