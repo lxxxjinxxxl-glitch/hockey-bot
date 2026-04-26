@@ -1,3 +1,5 @@
+# app.py
+
 import requests
 import json
 from fastapi import FastAPI, Request
@@ -71,13 +73,14 @@ async def webhook(req: Request):
     data = await req.json()
     print("UPDATE:", json.dumps(data, ensure_ascii=False, indent=2)[:800])
 
-    # --- MESSAGE_CALLBACK (нажатие Inline-кнопки) ---
-    if data.get("update_type") == "message_callback":
-        cb = data.get("callback_query", data)
-        user_id = cb["from"]["user_id"]
-        cb_data = cb.get("data") or cb.get("payload", {}).get("data") or ""
+    # --- CALLBACK (нажатие Inline-кнопки) ---
+    if data.get("callback"):
+        cb = data["callback"]
+        user_id = cb["user"]["user_id"]
+        cb_data = cb.get("payload", "")
 
-        # Записаться
+        print(f"CALLBACK: user={user_id}, payload={cb_data}")
+
         if cb_data.startswith("join_"):
             training_id = int(cb_data.split("_")[1])
             training = db.query(Training).get(training_id)
@@ -113,24 +116,22 @@ async def webhook(req: Request):
                 send_message(user_id, f"⏳ Мест нет. Вы {pos}-й в очереди.")
             return {"ok": True}
 
-        # Состав
         elif cb_data.startswith("list_"):
             training_id = int(cb_data.split("_")[1])
             main = get_main_list(training_id)
             queue = get_queue_list(training_id)
 
-            text = "👥 **Состав:**\n"
+            text = "👥 Состав:\n"
             if main:
                 for i, r in enumerate(main, 1):
                     text += f"{i}. ID:{r.user_id}\n"
             else:
                 text += "Пока никого\n"
-            text += "\n⏳ **Очередь:**\n"
+            text += "\n⏳ Очередь:\n"
             text += "\n".join(f"{i}. ID:{r.user_id}" for i, r in enumerate(queue, 1)) or "Пусто"
             send_message(user_id, text)
             return {"ok": True}
 
-        # Отказаться
         elif cb_data.startswith("leave_"):
             training_id = int(cb_data.split("_")[1])
             reg = db.query(Registration).filter_by(
@@ -157,7 +158,6 @@ async def webhook(req: Request):
             send_message(user_id, "❌ Вы отписаны")
             return {"ok": True}
 
-        # Удалить тренировку (только тренер)
         elif cb_data.startswith("delete_"):
             training_id = int(cb_data.split("_")[1])
             if not is_trainer(user_id):
@@ -168,12 +168,13 @@ async def webhook(req: Request):
             if training:
                 training.is_active = False
                 db.commit()
-                # Уведомить всех записанных
                 all_regs = db.query(Registration).filter_by(training_id=training_id).all()
                 for reg in all_regs:
                     send_message(reg.user_id, f"❌ Тренировка {training.date} отменена")
                 send_message(user_id, "✅ Тренировка удалена")
             return {"ok": True}
+
+        return {"ok": True}
 
     # --- ОБЫЧНОЕ СООБЩЕНИЕ ---
     if data.get("update_type") != "message_created":
@@ -187,7 +188,7 @@ async def webhook(req: Request):
 
     if text == "/start":
         if is_trainer(user_id):
-            send_message(user_id, "Привет, тренер! 🏒\n/add — создать тренировку\n/list — список\n/delete <ID> — удалить")
+            send_message(user_id, "Привет, тренер! 🏒\n/add — создать тренировку\n/list — список тренировок")
         else:
             send_message(user_id, "Привет! 🏒\n/list — список тренировок")
         return {"ok": True}
@@ -283,10 +284,10 @@ async def webhook(req: Request):
             elif step == "price":
                 state["price"] = text
                 state["step"] = "extra"
-                send_message(user_id, "ℹ️ Доп. информация (возраст и т.д.) или напиши «—» если нет:")
+                send_message(user_id, "ℹ️ Доп. информация (возраст и т.д.) или напиши «нет» если нет:")
 
             elif step == "extra":
-                state["extra"] = "" if text in ("-", "—", "нет", "пропустить") else text
+                state["extra"] = "" if text.lower() in ("нет", "-", "—", "пропустить") else text
 
                 training = Training(
                     date=state["date"],
@@ -308,14 +309,16 @@ async def webhook(req: Request):
                     f"🕐 {state['time_start']} — {state['time_end']}\n"
                     f"📍 {state['place']}\n"
                     f"🎯 {state['direction']}\n"
-                    f"👤 Тренер: {state['coaches']}\n"
+                    f"👥 Тренерский состав: {state['coaches']}\n"
                     f"👥 Мест: {state['max_slots']}\n"
                     f"💰 {state['price']} руб."
                 )
                 if state["extra"]:
                     post += f"\nℹ️ {state['extra']}"
+                else:
+                    post += "\nℹ️ Нет"
 
-                kb = training_inline_buttons(training.id, is_admin=True)
+                kb = training_inline_buttons(training.id)
                 resp = send_message(GROUP_CHAT_ID, post, kb)
 
                 if isinstance(resp, dict):
