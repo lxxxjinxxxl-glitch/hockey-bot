@@ -122,26 +122,23 @@ async def webhook(req: Request):
             training = db.query(Training).get(training_id)
 
             if not training or not training.is_active:
-                send_message(GROUP_CHAT_ID, f"@{user_display_name}, тренировка недоступна")
                 return {"ok": True}
 
             exist = db.query(Registration).filter_by(
                 training_id=training_id, user_id=user_id
             ).first()
             if exist:
-                # Пробуем в личку, иначе в чат
-                if not try_send_to_user(user_id, "Вы уже записаны / в очереди"):
-                    send_message(GROUP_CHAT_ID, f"@{user_display_name}, вы уже записаны")
+                try_send_to_user(user_id, "Вы уже записаны / в очереди")
                 return {"ok": True}
 
-            # Запрос фамилии (в личку или в чат)
-            user_states[user_id] = {
-                "step": "ask_lastname",
-                "training_id": training_id,
-                "display_name": user_display_name
-            }
-            if not try_send_to_user(user_id, "📝 Введите вашу ФАМИЛИЮ для записи:"):
-                send_message(GROUP_CHAT_ID, f"@{user_display_name}, напишите фамилию в чат для записи")
+            # Пробуем запросить фамилию в личку
+            if try_send_to_user(user_id, "📝 Введите вашу ФАМИЛИЮ для записи:"):
+                user_states[user_id] = {
+                    "step": "ask_lastname",
+                    "training_id": training_id,
+                    "display_name": user_display_name
+                }
+            # Если не можем — пользователь увидит сообщение при активации
             return {"ok": True}
 
         # ----- КТО ИДЁТ -----
@@ -163,8 +160,7 @@ async def webhook(req: Request):
             else:
                 text += "Пусто"
 
-            if not try_send_to_user(user_id, text):
-                send_message(GROUP_CHAT_ID, f"@{user_display_name}, список в личку не отправить. Напишите /start боту")
+            try_send_to_user(user_id, text)
             return {"ok": True}
 
         # ----- ОТКАЗАТЬСЯ -----
@@ -175,7 +171,7 @@ async def webhook(req: Request):
             ).first()
 
             if not reg:
-                send_message(GROUP_CHAT_ID, f"@{user_display_name}, вы не записаны")
+                try_send_to_user(user_id, "Вы не записаны")
                 return {"ok": True}
 
             was_main = (reg.status == "main")
@@ -204,7 +200,7 @@ async def webhook(req: Request):
             try_send_to_user(user_id, "❌ Вы отписаны")
             return {"ok": True}
 
-        # ----- УДАЛИТЬ -----
+        # ----- УДАЛИТЬ (тренер) -----
         elif cb_data.startswith("delete_"):
             training_id = int(cb_data.split("_")[1])
             if not is_trainer(user_id):
@@ -521,7 +517,7 @@ async def webhook(req: Request):
                         training.group_msg_id = str(msg_id)
                         db.commit()
 
-                # Тренеру в личку — сообщение с кнопками управления
+                # Тренеру в личку — кнопки управления
                 trainer_kb = trainer_training_buttons(training.id)
                 send_message(user_id, f"✅ Тренировка #{training.id} создана!", trainer_kb)
                 del user_states[user_id]
