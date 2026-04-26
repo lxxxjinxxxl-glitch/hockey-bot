@@ -8,4 +8,5 @@ load_dotenv(dotenv_path=env_path)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = "https://platform-api.max.ru/messages"
 GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID", "0"))
-TRAINER_IDS = [125743856]  # Ваш ID из логов
+TRAINER_IDS = [125743856]
+BOT_USER_ID = 623400516852
