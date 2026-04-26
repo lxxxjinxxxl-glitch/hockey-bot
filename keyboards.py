@@ -1,3 +1,5 @@
+# keyboards.py
+
 def training_inline_buttons(training_id: int):
     return {
         "attachments": [
@@ -22,6 +24,11 @@ def training_inline_buttons(training_id: int):
                                 "type": "callback",
                                 "text": "❌ Отказаться",
                                 "payload": f"leave_{training_id}"
+                            },
+                            {
+                                "type": "callback",
+                                "text": "✏️ Изменить",
+                                "payload": f"edit_{training_id}"
                             }
                         ]
                     ]

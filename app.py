@@ -1,17 +1,19 @@
+# app.py
 import requests
 import json
 import re
 from fastapi import FastAPI, Request
 
-from database import init_db, SessionLocal, Training, Registration
+from database import init_db, SessionLocal, Training, Registration, ActivatedUser
 from keyboards import training_inline_buttons
-from config import BOT_TOKEN, API_URL, GROUP_CHAT_ID, TRAINER_IDS, BOT_USER_ID
+from config import BOT_TOKEN, API_URL, GROUP_CHAT_ID, TRAINER_IDS, BOT_LINK
 
 init_db()
 db = SessionLocal()
 
 app = FastAPI()
 
+# FSM: ключ = user_id, значение = {"step": "...", ...}
 user_states = {}
 edit_states = {}
 
@@ -53,17 +55,8 @@ def send_message(target_id: int, text: str, inline_keyboard=None):
         return {"ok": False, "text": r.text}
 
 
-def can_send_to_user(user_id: int) -> bool:
-    """Проверяет, можно ли отправить сообщение в личку (тестовая точка)"""
-    try:
-        resp = send_message(user_id, ".")
-        if isinstance(resp, dict) and resp.get("message"):
-            return True
-        if isinstance(resp, dict) and resp.get("code") == "user.blocked":
-            return False
-        return False
-    except:
-        return False
+def is_activated(user_id: int) -> bool:
+    return db.query(ActivatedUser).filter_by(user_id=user_id).first() is not None
 
 
 def is_trainer(user_id: int) -> bool:
@@ -82,11 +75,10 @@ def get_queue_list(training_id: int):
     ).order_by(Registration.position).all()
 
 
-def user_display(r) -> str:
-    name = f"{r.last_name} {r.first_name}".strip()
-    if not name:
-        name = f"ID:{r.user_id}"
-    return f"{name} (ID:{r.user_id})"
+def reg_display(r) -> str:
+    if r.last_name:
+        return f"{r.last_name} (ID:{r.user_id})"
+    return f"ID:{r.user_id}"
 
 
 def build_training_post(training) -> str:
@@ -115,8 +107,7 @@ async def webhook(req: Request):
         cb = data.get("callback") or data
         user_id = cb.get("user", {}).get("user_id") or cb.get("from", {}).get("user_id") or ""
         user_first = cb.get("user", {}).get("first_name", "")
-        user_last = cb.get("user", {}).get("last_name", "")
-        user_display_name = f"{user_first} {user_last}".strip()
+        user_display_name = user_first or f"ID:{user_id}"
         cb_data = cb.get("payload") or cb.get("data") or ""
 
         print(f"CALLBACK: user={user_id} ({user_display_name}), payload={cb_data}")
@@ -124,13 +115,13 @@ async def webhook(req: Request):
         if not user_id:
             return {"ok": True}
 
-        # Проверка активации
-        user_activated = can_send_to_user(user_id)
+        activated = is_activated(user_id)
 
         # ----- ЗАПИСАТЬСЯ -----
         if cb_data.startswith("join_"):
             training_id = int(cb_data.split("_")[1])
             training = db.query(Training).get(training_id)
+
             if not training or not training.is_active:
                 send_message(GROUP_CHAT_ID, f"@{user_display_name}, тренировка недоступна")
                 return {"ok": True}
@@ -139,24 +130,20 @@ async def webhook(req: Request):
                 training_id=training_id, user_id=user_id
             ).first()
             if exist:
-                if user_activated:
-                    send_message(user_id, "Вы уже записаны / в очереди")
-                else:
-                    send_message(GROUP_CHAT_ID, f"@{user_display_name}, вы уже записаны. Напишите /start боту")
+                send_message(GROUP_CHAT_ID, f"@{user_display_name}, вы уже записаны")
                 return {"ok": True}
 
-            if not user_activated:
+            if not activated:
                 send_message(GROUP_CHAT_ID,
-                    f"@{user_display_name}, для записи начните диалог с ботом:\n"
-                    f"https://max.ru/id623400516852_bot → нажмите НАЧАТЬ"
+                    f"@{user_display_name}, для записи перейдите к боту и нажмите НАЧАТЬ:\n{BOT_LINK}"
                 )
                 return {"ok": True}
 
+            # Запускаем FSM: запрос фамилии в личку
             user_states[user_id] = {
                 "step": "ask_lastname",
                 "training_id": training_id,
-                "first_name": user_first,
-                "last_name": user_last
+                "display_name": user_display_name
             }
             send_message(user_id, "📝 Введите вашу ФАМИЛИЮ для записи:")
             return {"ok": True}
@@ -170,22 +157,21 @@ async def webhook(req: Request):
             text = "👥 Состав:\n"
             if main:
                 for i, r in enumerate(main, 1):
-                    text += f"{i}. {user_display(r)}\n"
+                    text += f"{i}. {reg_display(r)}\n"
             else:
                 text += "Пока никого\n"
             text += "\n⏳ Очередь:\n"
             if queue:
                 for i, r in enumerate(queue, 1):
-                    text += f"{i}. {user_display(r)}\n"
+                    text += f"{i}. {reg_display(r)}\n"
             else:
                 text += "Пусто"
 
-            if user_activated:
+            if activated:
                 send_message(user_id, text)
             else:
                 send_message(GROUP_CHAT_ID,
-                    f"@{user_display_name}, для просмотра списка начните диалог с ботом:\n"
-                    f"https://max.ru/id623400516852_bot → нажмите НАЧАТЬ"
+                    f"@{user_display_name}, для просмотра списка перейдите к боту:\n{BOT_LINK}"
                 )
             return {"ok": True}
 
@@ -195,19 +181,19 @@ async def webhook(req: Request):
             reg = db.query(Registration).filter_by(
                 training_id=training_id, user_id=user_id
             ).first()
+
             if not reg:
                 send_message(GROUP_CHAT_ID, f"@{user_display_name}, вы не записаны")
                 return {"ok": True}
 
-            if not user_activated:
+            if not activated:
                 send_message(GROUP_CHAT_ID,
-                    f"@{user_display_name}, для отказа начните диалог с ботом:\n"
-                    f"https://max.ru/id623400516852_bot → нажмите НАЧАТЬ"
+                    f"@{user_display_name}, для отказа перейдите к боту:\n{BOT_LINK}"
                 )
                 return {"ok": True}
 
             was_main = (reg.status == "main")
-            reg_display = user_display(reg)
+            disp = reg_display(reg)
             db.delete(reg)
             db.commit()
 
@@ -221,15 +207,35 @@ async def webhook(req: Request):
                     db.commit()
                     send_message(first_queue.user_id, "🎉 Место освободилось! Вы в основном составе!")
                     send_message(GROUP_CHAT_ID,
-                        f"❌ {reg_display} отказался от участия.\n"
-                        f"🎉 {user_display(first_queue)} переведён из очереди в основной состав!"
+                        f"❌ {disp} отказался от участия.\n"
+                        f"🎉 {reg_display(first_queue)} переведён из очереди в основной состав!"
                     )
                 else:
-                    send_message(GROUP_CHAT_ID, f"❌ {reg_display} отказался от участия.")
+                    send_message(GROUP_CHAT_ID, f"❌ {disp} отказался от участия.")
             else:
-                send_message(GROUP_CHAT_ID, f"❌ {reg_display} покинул очередь.")
+                send_message(GROUP_CHAT_ID, f"❌ {disp} покинул очередь.")
 
             send_message(user_id, "❌ Вы отписаны")
+            return {"ok": True}
+
+        # ----- ИЗМЕНИТЬ (тренер) -----
+        elif cb_data.startswith("edit_"):
+            training_id = int(cb_data.split("_")[1])
+            if not is_trainer(user_id):
+                send_message(GROUP_CHAT_ID, f"@{user_display_name}, только для тренеров")
+                return {"ok": True}
+            if not activated:
+                send_message(GROUP_CHAT_ID,
+                    f"@{user_display_name}, перейдите к боту для редактирования:\n{BOT_LINK}"
+                )
+                return {"ok": True}
+
+            edit_states[user_id] = {"training_id": training_id, "step": "choose_field"}
+            send_message(user_id,
+                "Что меняем?\n"
+                "1 — Дата\n2 — Время\n3 — Место\n4 — Направления\n"
+                "5 — Тренеры\n6 — Места\n7 — Цена\n8 — Доп.инфо"
+            )
             return {"ok": True}
 
         return {"ok": True}
@@ -244,12 +250,13 @@ async def webhook(req: Request):
 
     print(f"TEXT: '{text}' | from: {user_id}")
 
-    # FSM: фамилия
+    # ----- FSM: фамилия -----
     if user_id in user_states and user_states[user_id].get("step") == "ask_lastname":
         state = user_states[user_id]
-        state["last_name"] = text
+        last_name = text.strip()
         training_id = state["training_id"]
         training = db.query(Training).get(training_id)
+        display_name = state.get("display_name", f"ID:{user_id}")
 
         if not training or not training.is_active:
             send_message(user_id, "Тренировка недоступна")
@@ -263,33 +270,44 @@ async def webhook(req: Request):
             pos = main_count + 1
             db.add(Registration(
                 training_id=training_id, user_id=user_id,
-                first_name=state.get("first_name", ""), last_name=text,
-                status="main", position=pos
+                last_name=last_name, status="main", position=pos
             ))
             db.commit()
-            send_message(user_id, f"✅ {text} {state.get('first_name', '')}, вы в основном составе! ({pos}/{training.max_slots})")
+            msg_text = f"✅ {last_name}, вы в основном составе! (#{pos}/{training.max_slots})"
+            chat_msg = f"✅ @{display_name} ({last_name}) записан в основной состав (#{pos}/{training.max_slots})"
         else:
             pos = queue_count + 1
             db.add(Registration(
                 training_id=training_id, user_id=user_id,
-                first_name=state.get("first_name", ""), last_name=text,
-                status="queue", position=pos
+                last_name=last_name, status="queue", position=pos
             ))
             db.commit()
-            send_message(user_id, f"⏳ {text} {state.get('first_name', '')}, мест нет. Вы {pos}-й в очереди.")
+            msg_text = f"⏳ {last_name}, мест нет. Вы {pos}-й в очереди."
+            chat_msg = f"⏳ @{display_name} ({last_name}) добавлен в очередь (#{pos})"
 
+        send_message(user_id, msg_text)
+        send_message(GROUP_CHAT_ID, chat_msg)
         del user_states[user_id]
         return {"ok": True}
 
-    # /start
+    # ----- /start -----
     if text == "/start":
+        if not is_activated(user_id):
+            db.add(ActivatedUser(user_id=user_id))
+            db.commit()
         if is_trainer(user_id):
-            send_message(user_id, "Привет, тренер!\n/add — создать\n/list — список\n/edit <ID> — изменить\n/delete <ID> — удалить")
+            send_message(user_id,
+                "Привет, тренер!\n"
+                "/add — создать тренировку\n"
+                "/list — список\n"
+                "/edit <ID> — изменить\n"
+                "/delete <ID> — удалить"
+            )
         else:
-            send_message(user_id, "Привет! 🏒\n/list — список тренировок")
+            send_message(user_id, "Привет! 🏒\n/list — список тренировок\nОжидайте приглашения на запись.")
         return {"ok": True}
 
-    # /list
+    # ----- /list -----
     if text == "/list":
         trainings = db.query(Training).filter_by(is_active=True).all()
         if not trainings:
@@ -302,7 +320,7 @@ async def webhook(req: Request):
         send_message(user_id, result)
         return {"ok": True}
 
-    # /add
+    # ----- /add -----
     if text == "/add":
         if not is_trainer(user_id):
             send_message(user_id, "Только для тренеров")
@@ -311,7 +329,7 @@ async def webhook(req: Request):
         send_message(user_id, "📅 Введи дату (24.04.2026):")
         return {"ok": True}
 
-    # /edit
+    # ----- /edit -----
     if text.startswith("/edit "):
         if not is_trainer(user_id):
             send_message(user_id, "Только для тренеров")
@@ -333,7 +351,7 @@ async def webhook(req: Request):
         )
         return {"ok": True}
 
-    # /delete
+    # ----- /delete -----
     if text.startswith("/delete "):
         if not is_trainer(user_id):
             send_message(user_id, "Только для тренеров")
@@ -354,22 +372,26 @@ async def webhook(req: Request):
             send_message(user_id, "Не найдена")
         return {"ok": True}
 
-    # FSM: редактирование
+    # ----- FSM: редактирование -----
     if user_id in edit_states:
         state = edit_states[user_id]
         step = state["step"]
         training = db.query(Training).get(state["training_id"])
 
         if step == "choose_field":
-            field_map = {"1": "date", "2": "time", "3": "place", "4": "direction", "5": "coaches", "6": "max_slots", "7": "price", "8": "extra"}
+            field_map = {"1": "date", "2": "time", "3": "place", "4": "direction",
+                         "5": "coaches", "6": "max_slots", "7": "price", "8": "extra"}
             if text in field_map:
                 state["field"] = field_map[text]
                 prompts = {
-                    "date": "📅 Новая дата:", "time": "🕐 Новое время (20:45-21:45):",
-                    "place": "📍 Новое место (или 1-Олимпийский, 2-Айсберг, 3-Десант, 4-своё):",
+                    "date": "📅 Новая дата:",
+                    "time": "🕐 Новое время (20:45-21:45):",
+                    "place": "📍 Новое место (или 1-Олимп, 2-Айсберг, 3-Десант, 4-своё):",
                     "direction": "🎯 Новые направления (1-5 или текст через запятую):",
-                    "coaches": "👤 Новые тренеры:", "max_slots": "👥 Новое макс. количество:",
-                    "price": "💰 Новая цена:", "extra": "ℹ️ Новая доп.информация:"
+                    "coaches": "👤 Новые тренеры:",
+                    "max_slots": "👥 Новое макс. количество:",
+                    "price": "💰 Новая цена:",
+                    "extra": "ℹ️ Новая доп.информация:"
                 }
                 state["step"] = "edit_value"
                 send_message(user_id, prompts[state["field"]])
@@ -401,7 +423,7 @@ async def webhook(req: Request):
             del edit_states[user_id]
             return {"ok": True}
 
-    # FSM: создание
+    # ----- FSM: создание тренировки -----
     if user_id in user_states:
         state = user_states[user_id]
         step = state.get("step", "")

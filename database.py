@@ -1,4 +1,4 @@
-# database.py (без изменений)
+# database.py
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
@@ -33,11 +33,17 @@ class Registration(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     training_id = Column(Integer, ForeignKey("trainings.id"), nullable=False)
     user_id = Column(Integer, nullable=False)
-    first_name = Column(String, default="")
     last_name = Column(String, default="")
     status = Column(String, default="main")
     position = Column(Integer, default=0)
     joined_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ActivatedUser(Base):
+    __tablename__ = "activated_users"
+
+    user_id = Column(Integer, primary_key=True)
+    activated_at = Column(DateTime, default=datetime.utcnow)
 
 
 def init_db():
