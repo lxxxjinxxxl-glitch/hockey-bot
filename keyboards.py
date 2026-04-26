@@ -1,7 +1,5 @@
-# keyboards.py
-
 def training_inline_buttons(training_id: int):
-    """Inline-кнопки для поста в чате"""
+    """Inline-кнопки для поста в чате (тип message)"""
     return {
         "attachments": [
             {
@@ -10,21 +8,21 @@ def training_inline_buttons(training_id: int):
                     "buttons": [
                         [
                             {
-                                "type": "callback",
+                                "type": "message",
                                 "text": "✅ Записаться",
-                                "payload": f"join_{training_id}"
+                                "payload": f"/join_{training_id}"
                             },
                             {
-                                "type": "callback",
+                                "type": "message",
                                 "text": "👥 Кто идёт?",
-                                "payload": f"list_{training_id}"
+                                "payload": f"/list_{training_id}"
                             }
                         ],
                         [
                             {
-                                "type": "callback",
+                                "type": "message",
                                 "text": "❌ Отказаться",
-                                "payload": f"leave_{training_id}"
+                                "payload": f"/leave_{training_id}"
                             }
                         ]
                     ]
