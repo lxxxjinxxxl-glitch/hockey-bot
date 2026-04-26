@@ -7,28 +7,21 @@ def training_inline_buttons(training_id: int):
                     "buttons": [
                         [
                             {
-                                "type": "callback",
+                                "type": "open_app",
                                 "text": "✅ Записаться",
                                 "payload": f"join_{training_id}"
                             },
                             {
-                                "type": "callback",
+                                "type": "open_app",
                                 "text": "👥 Кто идёт?",
                                 "payload": f"list_{training_id}"
                             }
                         ],
                         [
                             {
-                                "type": "callback",
+                                "type": "open_app",
                                 "text": "❌ Отказаться",
                                 "payload": f"leave_{training_id}"
-                            }
-                        ],
-                        [
-                            {
-                                "type": "link",
-                                "text": "🤖 Перейти к боту",
-                                "url": "https://max.ru/id623400516852_bot"
                             }
                         ]
                     ]
