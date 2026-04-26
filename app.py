@@ -50,6 +50,14 @@ def send_message(target_id: int, text: str, inline_keyboard=None):
         return {"ok": False, "text": r.text}
 
 
+def try_send_to_user(user_id: int, text: str) -> bool:
+    """Пытается отправить в личку. Возвращает True если успешно."""
+    resp = send_message(user_id, text)
+    if isinstance(resp, dict) and resp.get("message"):
+        return True
+    return False
+
+
 def is_trainer(user_id: int) -> bool:
     return user_id in TRAINER_IDS
 
@@ -71,6 +79,110 @@ async def webhook(req: Request):
     data = await req.json()
     print("UPDATE:", json.dumps(data, ensure_ascii=False, indent=2)[:500])
 
+    # --- MESSAGE_CALLBACK (кнопки) ---
+    if data.get("update_type") == "message_callback" or data.get("callback"):
+        cb = data.get("callback") or data
+        user_id = cb.get("user", {}).get("user_id") or cb.get("from", {}).get("user_id") or ""
+        user_name = cb.get("user", {}).get("first_name", "")
+        cb_data = cb.get("payload") or cb.get("data") or ""
+
+        print(f"CALLBACK: user={user_id} ({user_name}), payload={cb_data}")
+
+        if not user_id:
+            return {"ok": True}
+
+        # Записаться
+        if cb_data.startswith("join_"):
+            training_id = int(cb_data.split("_")[1])
+            training = db.query(Training).get(training_id)
+            if not training or not training.is_active:
+                if not try_send_to_user(user_id, "Тренировка недоступна"):
+                    send_message(GROUP_CHAT_ID, f"@{user_name}, тренировка недоступна")
+                return {"ok": True}
+
+            exist = db.query(Registration).filter_by(
+                training_id=training_id, user_id=user_id
+            ).first()
+            if exist:
+                if not try_send_to_user(user_id, "Вы уже записаны / в очереди"):
+                    send_message(GROUP_CHAT_ID, f"@{user_name}, вы уже записаны")
+                return {"ok": True}
+
+            main_count = len(get_main_list(training_id))
+            queue_count = len(get_queue_list(training_id))
+
+            if main_count < training.max_slots:
+                pos = main_count + 1
+                db.add(Registration(
+                    training_id=training_id, user_id=user_id,
+                    status="main", position=pos
+                ))
+                db.commit()
+                msg = f"✅ Вы в основном составе! ({pos}/{training.max_slots})"
+            else:
+                pos = queue_count + 1
+                db.add(Registration(
+                    training_id=training_id, user_id=user_id,
+                    status="queue", position=pos
+                ))
+                db.commit()
+                msg = f"⏳ Мест нет. Вы {pos}-й в очереди."
+
+            if not try_send_to_user(user_id, msg):
+                send_message(GROUP_CHAT_ID, f"@{user_name}, {msg}")
+            return {"ok": True}
+
+        # Кто идёт
+        elif cb_data.startswith("list_"):
+            training_id = int(cb_data.split("_")[1])
+            main = get_main_list(training_id)
+            queue = get_queue_list(training_id)
+
+            text = "👥 Состав:\n"
+            if main:
+                for i, r in enumerate(main, 1):
+                    text += f"{i}. ID:{r.user_id}\n"
+            else:
+                text += "Пока никого\n"
+            text += "\n⏳ Очередь:\n"
+            text += "\n".join(f"{i}. ID:{r.user_id}" for i, r in enumerate(queue, 1)) or "Пусто"
+
+            if not try_send_to_user(user_id, text):
+                send_message(GROUP_CHAT_ID, f"@{user_name}, список отправлен в личку (напишите /start боту)")
+            return {"ok": True}
+
+        # Отказаться
+        elif cb_data.startswith("leave_"):
+            training_id = int(cb_data.split("_")[1])
+            reg = db.query(Registration).filter_by(
+                training_id=training_id, user_id=user_id
+            ).first()
+            if not reg:
+                if not try_send_to_user(user_id, "Вы не записаны"):
+                    send_message(GROUP_CHAT_ID, f"@{user_name}, вы не записаны")
+                return {"ok": True}
+
+            was_main = (reg.status == "main")
+            db.delete(reg)
+            db.commit()
+
+            if was_main:
+                first_queue = db.query(Registration).filter_by(
+                    training_id=training_id, status="queue"
+                ).order_by(Registration.position).first()
+                if first_queue:
+                    first_queue.status = "main"
+                    first_queue.position = len(get_main_list(training_id)) + 1
+                    db.commit()
+                    if not try_send_to_user(first_queue.user_id, "🎉 Место освободилось! Вы в основном составе!"):
+                        pass  # не можем уведомить — ничего страшного
+
+            if not try_send_to_user(user_id, "❌ Вы отписаны"):
+                send_message(GROUP_CHAT_ID, f"@{user_name}, вы отписаны")
+            return {"ok": True}
+
+        return {"ok": True}
+
     # --- ОБЫЧНОЕ СООБЩЕНИЕ ---
     if data.get("update_type") != "message_created":
         return {"ok": True}
@@ -81,7 +193,6 @@ async def webhook(req: Request):
 
     print(f"TEXT: '{text}' | from: {user_id}")
 
-    # /start
     if text == "/start":
         if is_trainer(user_id):
             send_message(user_id, "Привет, тренер! 🏒\n/add — создать тренировку\n/list — список тренировок")
@@ -89,7 +200,6 @@ async def webhook(req: Request):
             send_message(user_id, "Привет! 🏒\n/list — список тренировок")
         return {"ok": True}
 
-    # /list
     if text == "/list":
         trainings = db.query(Training).filter_by(is_active=True).all()
         if not trainings:
@@ -102,93 +212,12 @@ async def webhook(req: Request):
         send_message(user_id, result)
         return {"ok": True}
 
-    # /add
     if text == "/add":
         if not is_trainer(user_id):
             send_message(user_id, "Только для тренеров")
             return {"ok": True}
         user_states[user_id] = {"step": "date"}
         send_message(user_id, "📅 Введи дату (Пример: Пятница 24.04.2026):")
-        return {"ok": True}
-
-    # /join_<id> — записаться (от кнопки)
-    if text.startswith("/join_"):
-        training_id = int(text.split("_")[1])
-        training = db.query(Training).get(training_id)
-        if not training or not training.is_active:
-            send_message(user_id, "Тренировка недоступна")
-            return {"ok": True}
-
-        exist = db.query(Registration).filter_by(
-            training_id=training_id, user_id=user_id
-        ).first()
-        if exist:
-            send_message(user_id, "Вы уже записаны / в очереди")
-            return {"ok": True}
-
-        main_count = len(get_main_list(training_id))
-        queue_count = len(get_queue_list(training_id))
-
-        if main_count < training.max_slots:
-            pos = main_count + 1
-            db.add(Registration(
-                training_id=training_id, user_id=user_id,
-                status="main", position=pos
-            ))
-            db.commit()
-            send_message(user_id, f"✅ Вы в основном составе! ({pos}/{training.max_slots})")
-        else:
-            pos = queue_count + 1
-            db.add(Registration(
-                training_id=training_id, user_id=user_id,
-                status="queue", position=pos
-            ))
-            db.commit()
-            send_message(user_id, f"⏳ Мест нет. Вы {pos}-й в очереди.")
-        return {"ok": True}
-
-    # /list_<id> — кто идёт (от кнопки)
-    if text.startswith("/list_"):
-        training_id = int(text.split("_")[1])
-        main = get_main_list(training_id)
-        queue = get_queue_list(training_id)
-
-        text_out = "👥 Состав:\n"
-        if main:
-            for i, r in enumerate(main, 1):
-                text_out += f"{i}. ID:{r.user_id}\n"
-        else:
-            text_out += "Пока никого\n"
-        text_out += "\n⏳ Очередь:\n"
-        text_out += "\n".join(f"{i}. ID:{r.user_id}" for i, r in enumerate(queue, 1)) or "Пусто"
-        send_message(user_id, text_out)
-        return {"ok": True}
-
-    # /leave_<id> — отказаться (от кнопки)
-    if text.startswith("/leave_"):
-        training_id = int(text.split("_")[1])
-        reg = db.query(Registration).filter_by(
-            training_id=training_id, user_id=user_id
-        ).first()
-        if not reg:
-            send_message(user_id, "Вы не записаны")
-            return {"ok": True}
-
-        was_main = (reg.status == "main")
-        db.delete(reg)
-        db.commit()
-
-        if was_main:
-            first_queue = db.query(Registration).filter_by(
-                training_id=training_id, status="queue"
-            ).order_by(Registration.position).first()
-            if first_queue:
-                first_queue.status = "main"
-                first_queue.position = len(get_main_list(training_id)) + 1
-                db.commit()
-                send_message(first_queue.user_id, "🎉 Место освободилось! Вы в основном составе!")
-
-        send_message(user_id, "❌ Вы отписаны")
         return {"ok": True}
 
     # FSM
