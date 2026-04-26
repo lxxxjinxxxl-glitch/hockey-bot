@@ -73,27 +73,18 @@ async def webhook(req: Request):
     data = await req.json()
     print("UPDATE:", json.dumps(data, ensure_ascii=False, indent=2)[:800])
 
-    # --- CALLBACK (нажатие Inline-кнопки) ---
-    if data.get("callback"):
-        cb = data["callback"]
-        user_id = cb["user"]["user_id"]
-        cb_data = cb.get("payload", "")
+ # --- MESSAGE_CALLBACK (нажатие Inline-кнопки) ---
+    if data.get("update_type") == "message_callback" or data.get("callback"):
+        cb = data.get("callback") or data
+        user_id = cb.get("user", {}).get("user_id") or cb.get("from", {}).get("user_id") or ""
+        cb_data = cb.get("payload") or cb.get("data") or ""
 
-        print(f"CALLBACK: user={user_id}, payload={cb_data}")
+        print(f"CALLBACK: update_type={data.get('update_type')}, user={user_id}, payload={cb_data}")
+        print(f"CALLBACK RAW: {json.dumps(data, ensure_ascii=False)[:500]}")
 
-        if cb_data.startswith("join_"):
-            training_id = int(cb_data.split("_")[1])
-            training = db.query(Training).get(training_id)
-            if not training or not training.is_active:
-                send_message(user_id, "Тренировка недоступна")
-                return {"ok": True}
-
-            exist = db.query(Registration).filter_by(
-                training_id=training_id, user_id=user_id
-            ).first()
-            if exist:
-                send_message(user_id, "Вы уже записаны / в очереди")
-                return {"ok": True}
+        if not user_id:
+            print("CALLBACK ERROR: no user_id")
+            return {"ok": True}
 
             main_count = len(get_main_list(training_id))
             queue_count = len(get_queue_list(training_id))

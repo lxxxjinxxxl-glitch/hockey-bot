@@ -1,9 +1,32 @@
 import requests
-from config import BOT_TOKEN
 
-# 👇 Публичный URL вашего сервера на Railway
-RAILWAY_URL = "https://твой-сервер.railway.app/webhook"
+BOT_TOKEN = "f9LHodD0cOK84NIrQMJHPRnik8266f6x7drNxJrLZ49v5-gGwdY9o0KJHBJNNudPUO-TyPkhZ5VkAO0Z9G9S"
+WEBHOOK_URL = "https://hockey-bot-production.up.railway.app/webhook"
 
-url = f"https://platform-api.max.ru/bot/{BOT_TOKEN}/set_webhook"
-resp = requests.post(url, json={"url": RAILWAY_URL})
-print("Webhook set:", resp.status_code, resp.text)
+# Сначала удаляем старую подписку
+requests.delete(
+    f"https://platform-api.max.ru/subscriptions?url={WEBHOOK_URL}",
+    headers={"Authorization": BOT_TOKEN}
+)
+
+# Пробуем разные названия callback-события
+types_to_try = [
+    "message_callback",
+    "inline_keyboard_callback",
+    "button_callback",
+    "callback_query",
+]
+
+for t in types_to_try:
+    resp = requests.post(
+        "https://platform-api.max.ru/subscriptions",
+        headers={"Authorization": BOT_TOKEN, "Content-Type": "application/json"},
+        json={
+            "url": WEBHOOK_URL,
+            "update_types": ["message_created", t]
+        }
+    )
+    print(f"{t}: {resp.status_code} | {resp.text[:200]}")
+    if resp.status_code == 200:
+        print(f"✅ Найдено: {t}")
+        break
