@@ -1,3 +1,5 @@
+# keyboards.py
+
 def training_inline_buttons(training_id: int):
     return {
         "attachments": [
@@ -7,21 +9,28 @@ def training_inline_buttons(training_id: int):
                     "buttons": [
                         [
                             {
-                                "type": "open_app",
+                                "type": "callback",
                                 "text": "✅ Записаться",
                                 "payload": f"join_{training_id}"
                             },
                             {
-                                "type": "open_app",
+                                "type": "callback",
                                 "text": "👥 Кто идёт?",
                                 "payload": f"list_{training_id}"
                             }
                         ],
                         [
                             {
-                                "type": "open_app",
+                                "type": "callback",
                                 "text": "❌ Отказаться",
                                 "payload": f"leave_{training_id}"
+                            }
+                        ],
+                        [
+                            {
+                                "type": "link",
+                                "text": "🤖 Перейти к боту",
+                                "url": "https://max.ru/id623400516852_bot"
                             }
                         ]
                     ]

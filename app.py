@@ -423,7 +423,6 @@ async def webhook(req: Request):
         if step in ("ask_lastname",):
             return {"ok": True}
 
-        # Дополнительная проверка: только тренер может создавать
         if not is_trainer(user_id):
             del user_states[user_id]
             send_message(user_id, "Только для тренеров")
@@ -527,6 +526,8 @@ async def webhook(req: Request):
                     if msg_id:
                         training.group_msg_id = str(msg_id)
                         db.commit()
+                else:
+                    print(f"ERROR sending to chat: {resp}")
 
                 trainer_kb = trainer_training_buttons(training.id)
                 send_message(user_id, f"✅ Тренировка #{training.id} создана!", trainer_kb)
