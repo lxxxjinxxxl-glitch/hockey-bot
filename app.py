@@ -553,9 +553,26 @@ async def webhook(req: Request):
                 old_slots = training.max_slots
                 training.max_slots = int(text)
                 if training.max_slots > old_slots:
-                    moved = move_queue_to_main(training.id, training.max_slots - old_slots)
+                    added = training.max_slots - old_slots
+                    moved = move_queue_to_main(training.id, added)
                     if moved:
-                        send_message(user_id, f"🎉 {moved} чел. переведены из очереди в состав!")
+                        send_message(GROUP_CHAT_ID,
+                            f"👥 Количество мест увеличено до {training.max_slots}.\n"
+                            f"🎉 {moved} чел. переведены из очереди в основной состав!"
+                        )
+                        send_message(user_id,
+                            f"👥 Мест увеличено до {training.max_slots}.\n"
+                            f"🎉 {moved} чел. переведены из очереди в состав!"
+                        )
+                    else:
+                        send_message(GROUP_CHAT_ID,
+                            f"👥 Количество мест увеличено до {training.max_slots}."
+                        )
+                        send_message(user_id, f"👥 Мест увеличено до {training.max_slots}.")
+                elif training.max_slots < old_slots:
+                    send_message(user_id,
+                        f"⚠️ Мест уменьшено до {training.max_slots}. Новые не добавлены."
+                    )
             else:
                 setattr(training, field, text)
             db.commit()
@@ -699,9 +716,9 @@ async def webhook(req: Request):
                 send_message(user_id, f"✅ Тренировка #{training.id} создана!", trainer_kb)
                 del user_states[user_id]
 
-                # Автозапись Щекетова через 5 секунд
+                # Автозапись Щекетова через 10 секунд
                 def auto_join():
-                    time.sleep(5)
+                    time.sleep(300)
                     tr = db.query(Training).get(training.id)
                     if not tr or not tr.is_active:
                         return
