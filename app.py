@@ -15,7 +15,6 @@ app = FastAPI()
 
 user_states = {}
 edit_states = {}
-# FSM для редактирования времени: сохраняем начальное время
 edit_time_start = {}
 
 PLACES = {
@@ -57,7 +56,6 @@ def send_message(target_id: int, text: str, inline_keyboard=None):
 
 
 def edit_message(message_id: str, text: str, inline_keyboard=None):
-    """Редактирует сообщение по message_id"""
     headers = {
         "Authorization": BOT_TOKEN,
         "Content-Type": "application/json"
@@ -76,7 +74,6 @@ def edit_message(message_id: str, text: str, inline_keyboard=None):
 
 
 def delete_message(message_id: str):
-    """Удаляет сообщение по message_id"""
     headers = {"Authorization": BOT_TOKEN}
     url = f"https://platform-api.max.ru/messages?message_id={message_id}"
     r = requests.delete(url, headers=headers)
@@ -114,7 +111,6 @@ def reg_display(r) -> str:
 
 
 def build_training_post(training) -> str:
-    """Формирует текст поста с составом и очередью"""
     main = get_main_list(training.id)
     queue = get_queue_list(training.id)
 
@@ -147,7 +143,6 @@ def build_training_post(training) -> str:
 
 
 def update_training_post(training):
-    """Обновляет пост тренировки в чате"""
     if training.group_msg_id:
         post = build_training_post(training)
         kb = training_inline_buttons(training.id)
@@ -188,12 +183,17 @@ async def webhook(req: Request):
                 return {"ok": True}
 
             # Запрашиваем фамилию в чате
+            resp = send_message(GROUP_CHAT_ID, f"@{user_display_name}, введите вашу ФАМИЛИЮ для записи:")
+            ask_msg_id = None
+            if isinstance(resp, dict) and resp.get("message"):
+                ask_msg_id = resp["message"]["body"]["mid"]
+
             user_states[user_id] = {
                 "step": "ask_lastname_in_chat",
                 "training_id": training_id,
-                "display_name": user_display_name
+                "display_name": user_display_name,
+                "ask_msg_id": ask_msg_id
             }
-            send_message(GROUP_CHAT_ID, f"@{user_display_name}, введите вашу ФАМИЛИЮ для записи:")
             return {"ok": True}
 
         # ----- ОТКАЗАТЬСЯ -----
@@ -232,7 +232,6 @@ async def webhook(req: Request):
                 send_message(GROUP_CHAT_ID, f"❌ {disp} покинул очередь.")
 
             try_send_to_user(user_id, "❌ Вы отписаны")
-            # Обновляем пост
             if training:
                 update_training_post(training)
             return {"ok": True}
@@ -309,9 +308,13 @@ async def webhook(req: Request):
         training = db.query(Training).get(training_id)
         display_name = state.get("display_name", f"ID:{user_id}")
 
-        # Удаляем сообщение с фамилией из чата
+        # Удаляем сообщение с фамилией
         if msg_id:
             delete_message(msg_id)
+        # Удаляем сообщение с запросом фамилии
+        ask_msg_id = state.get("ask_msg_id")
+        if ask_msg_id:
+            delete_message(ask_msg_id)
 
         if not training or not training.is_active:
             try_send_to_user(user_id, "Тренировка недоступна")
@@ -340,10 +343,8 @@ async def webhook(req: Request):
             msg_text = f"⏳ {last_name}, мест нет. Вы {pos}-й в очереди."
             chat_msg = f"⏳ {display_name} ({last_name}) добавлен в очередь (#{pos})"
 
-        # Подтверждение в личку (если может) + в чат
         try_send_to_user(user_id, msg_text)
         send_message(GROUP_CHAT_ID, chat_msg)
-        # Обновляем пост
         if training:
             update_training_post(training)
         del user_states[user_id]
@@ -446,7 +447,7 @@ async def webhook(req: Request):
                          "5": "coaches", "6": "max_slots", "7": "price", "8": "extra"}
             if text in field_map:
                 state["field"] = field_map[text]
-                if text == "2":  # Время — спрашиваем начало
+                if text == "2":
                     state["step"] = "edit_time_start"
                     send_message(user_id, "🕐 Новое время НАЧАЛА (20:45):")
                 else:
