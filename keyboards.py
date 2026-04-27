@@ -1,6 +1,7 @@
 # keyboards.py
 
 def training_inline_buttons(training_id: int):
+    """Кнопки под постом в чате"""
     return {
         "attachments": [
             {
@@ -15,22 +16,8 @@ def training_inline_buttons(training_id: int):
                             },
                             {
                                 "type": "callback",
-                                "text": "👥 Кто идёт?",
-                                "payload": f"list_{training_id}"
-                            }
-                        ],
-                        [
-                            {
-                                "type": "callback",
                                 "text": "❌ Отказаться",
                                 "payload": f"leave_{training_id}"
-                            }
-                        ],
-                        [
-                            {
-                                "type": "link",
-                                "text": "🤖 Перейти к боту",
-                                "url": "https://max.ru/id623400516852_bot"
                             }
                         ]
                     ]
@@ -41,6 +28,7 @@ def training_inline_buttons(training_id: int):
 
 
 def trainer_training_buttons(training_id: int):
+    """Кнопки тренера в личке после создания"""
     return {
         "attachments": [
             {

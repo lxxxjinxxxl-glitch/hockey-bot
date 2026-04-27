@@ -39,12 +39,5 @@ class Registration(Base):
     joined_at = Column(DateTime, default=datetime.utcnow)
 
 
-class ActivatedUser(Base):
-    __tablename__ = "activated_users"
-
-    user_id = Column(Integer, primary_key=True)
-    activated_at = Column(DateTime, default=datetime.utcnow)
-
-
 def init_db():
     Base.metadata.create_all(bind=engine)

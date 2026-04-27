@@ -1,3 +1,4 @@
+# app.py
 import requests
 import json
 import re
@@ -14,6 +15,8 @@ app = FastAPI()
 
 user_states = {}
 edit_states = {}
+# FSM для редактирования времени: сохраняем начальное время
+edit_time_start = {}
 
 PLACES = {
     "1": "ЛДС Олимпийский",
@@ -50,7 +53,35 @@ def send_message(target_id: int, text: str, inline_keyboard=None):
         return r.json()
     except:
         print("SEND RAW:", r.text[:300])
-        return {"ok": False, "text": r.text}
+        return {"ok": False}
+
+
+def edit_message(message_id: str, text: str, inline_keyboard=None):
+    """Редактирует сообщение по message_id"""
+    headers = {
+        "Authorization": BOT_TOKEN,
+        "Content-Type": "application/json"
+    }
+    url = f"https://platform-api.max.ru/messages?message_id={message_id}"
+    payload = {"text": text}
+    if inline_keyboard:
+        payload["attachments"] = inline_keyboard["attachments"]
+
+    r = requests.put(url, headers=headers, json=payload)
+    print(f"EDIT {message_id}: {r.status_code}")
+    try:
+        return r.json()
+    except:
+        return {"ok": False}
+
+
+def delete_message(message_id: str):
+    """Удаляет сообщение по message_id"""
+    headers = {"Authorization": BOT_TOKEN}
+    url = f"https://platform-api.max.ru/messages?message_id={message_id}"
+    r = requests.delete(url, headers=headers)
+    print(f"DELETE {message_id}: {r.status_code}")
+    return r.status_code
 
 
 def try_send_to_user(user_id: int, text: str) -> bool:
@@ -83,6 +114,10 @@ def reg_display(r) -> str:
 
 
 def build_training_post(training) -> str:
+    """Формирует текст поста с составом и очередью"""
+    main = get_main_list(training.id)
+    queue = get_queue_list(training.id)
+
     post = (
         f"🏒 НОВАЯ ТРЕНИРОВКА\n"
         f"📅 {training.date}\n"
@@ -95,7 +130,28 @@ def build_training_post(training) -> str:
     )
     if training.extra and training.extra.lower() not in ("нет", "-", "—", "пропустить"):
         post += f"\nℹ️ {training.extra}"
+
+    post += f"\n\n👥 Состав ({len(main)}/{training.max_slots}):"
+    if main:
+        for i, r in enumerate(main, 1):
+            post += f"\n{i}. {reg_display(r)}"
+    else:
+        post += "\nПока никого"
+
+    if queue:
+        post += "\n\n⏳ Очередь:"
+        for i, r in enumerate(queue, 1):
+            post += f"\n{i}. {reg_display(r)}"
+
     return post
+
+
+def update_training_post(training):
+    """Обновляет пост тренировки в чате"""
+    if training.group_msg_id:
+        post = build_training_post(training)
+        kb = training_inline_buttons(training.id)
+        edit_message(training.group_msg_id, post, kb)
 
 
 @app.post("/webhook")
@@ -103,7 +159,7 @@ async def webhook(req: Request):
     data = await req.json()
     print("UPDATE:", json.dumps(data, ensure_ascii=False, indent=2)[:500])
 
-    # --- MESSAGE_CALLBACK ---
+    # --- MESSAGE_CALLBACK (кнопки) ---
     if data.get("update_type") == "message_callback" or data.get("callback"):
         cb = data.get("callback") or data
         user_id = cb.get("user", {}).get("user_id") or cb.get("from", {}).get("user_id") or ""
@@ -131,39 +187,19 @@ async def webhook(req: Request):
                 try_send_to_user(user_id, "Вы уже записаны / в очереди")
                 return {"ok": True}
 
-            if try_send_to_user(user_id, "📝 Введите вашу ФАМИЛИЮ для записи:"):
-                user_states[user_id] = {
-                    "step": "ask_lastname",
-                    "training_id": training_id,
-                    "display_name": user_display_name
-                }
-            return {"ok": True}
-
-        # ----- КТО ИДЁТ -----
-        elif cb_data.startswith("list_"):
-            training_id = int(cb_data.split("_")[1])
-            main = get_main_list(training_id)
-            queue = get_queue_list(training_id)
-
-            text = "👥 Состав:\n"
-            if main:
-                for i, r in enumerate(main, 1):
-                    text += f"{i}. {reg_display(r)}\n"
-            else:
-                text += "Пока никого\n"
-            text += "\n⏳ Очередь:\n"
-            if queue:
-                for i, r in enumerate(queue, 1):
-                    text += f"{i}. {reg_display(r)}\n"
-            else:
-                text += "Пусто"
-
-            try_send_to_user(user_id, text)
+            # Запрашиваем фамилию в чате
+            user_states[user_id] = {
+                "step": "ask_lastname_in_chat",
+                "training_id": training_id,
+                "display_name": user_display_name
+            }
+            send_message(GROUP_CHAT_ID, f"@{user_display_name}, введите вашу ФАМИЛИЮ для записи:")
             return {"ok": True}
 
         # ----- ОТКАЗАТЬСЯ -----
         elif cb_data.startswith("leave_"):
             training_id = int(cb_data.split("_")[1])
+            training = db.query(Training).get(training_id)
             reg = db.query(Registration).filter_by(
                 training_id=training_id, user_id=user_id
             ).first()
@@ -196,9 +232,12 @@ async def webhook(req: Request):
                 send_message(GROUP_CHAT_ID, f"❌ {disp} покинул очередь.")
 
             try_send_to_user(user_id, "❌ Вы отписаны")
+            # Обновляем пост
+            if training:
+                update_training_post(training)
             return {"ok": True}
 
-        # ----- УДАЛИТЬ -----
+        # ----- УДАЛИТЬ (тренер) -----
         elif cb_data.startswith("delete_"):
             training_id = int(cb_data.split("_")[1])
             if not is_trainer(user_id):
@@ -214,7 +253,7 @@ async def webhook(req: Request):
                 send_message(GROUP_CHAT_ID, f"❌ Тренировка #{training_id} отменена")
             return {"ok": True}
 
-        # ----- ИЗМЕНИТЬ -----
+        # ----- ИЗМЕНИТЬ (тренер) -----
         elif cb_data.startswith("edit_"):
             training_id = int(cb_data.split("_")[1])
             if not is_trainer(user_id):
@@ -223,9 +262,24 @@ async def webhook(req: Request):
             edit_states[user_id] = {"training_id": training_id, "step": "choose_field"}
             try_send_to_user(user_id,
                 "Что меняем?\n"
-                "1 — Дата\n2 — Время\n3 — Место\n4 — Направления\n"
-                "5 — Тренеры\n6 — Места\n7 — Цена\n8 — Доп.инфо"
+                "1 — Дата\n"
+                "2 — Время\n"
+                "3 — Место\n"
+                "4 — Направления\n"
+                "5 — Тренеры\n"
+                "6 — Места\n"
+                "7 — Цена\n"
+                "8 — Доп.инфо"
             )
+            return {"ok": True}
+
+        # ----- СОСТАВ (тренер в личке) -----
+        elif cb_data.startswith("list_"):
+            training_id = int(cb_data.split("_")[1])
+            training = db.query(Training).get(training_id)
+            if training:
+                post = build_training_post(training)
+                try_send_to_user(user_id, post)
             return {"ok": True}
 
         return {"ok": True}
@@ -237,6 +291,7 @@ async def webhook(req: Request):
     msg = data["message"]
     text = msg["body"].get("text", "").strip()
     user_id = msg["sender"]["user_id"]
+    msg_id = msg["body"].get("mid", "")
 
     print(f"TEXT: '{text}' | from: {user_id}")
 
@@ -244,14 +299,19 @@ async def webhook(req: Request):
     if text.startswith("/"):
         user_states.pop(user_id, None)
         edit_states.pop(user_id, None)
+        edit_time_start.pop(user_id, None)
 
-    # ----- FSM: фамилия -----
-    if user_id in user_states and user_states[user_id].get("step") == "ask_lastname":
+    # ----- FSM: фамилия в чате -----
+    if user_id in user_states and user_states[user_id].get("step") == "ask_lastname_in_chat":
         state = user_states[user_id]
         last_name = text.strip()
         training_id = state["training_id"]
         training = db.query(Training).get(training_id)
         display_name = state.get("display_name", f"ID:{user_id}")
+
+        # Удаляем сообщение с фамилией из чата
+        if msg_id:
+            delete_message(msg_id)
 
         if not training or not training.is_active:
             try_send_to_user(user_id, "Тренировка недоступна")
@@ -280,8 +340,12 @@ async def webhook(req: Request):
             msg_text = f"⏳ {last_name}, мест нет. Вы {pos}-й в очереди."
             chat_msg = f"⏳ {display_name} ({last_name}) добавлен в очередь (#{pos})"
 
+        # Подтверждение в личку (если может) + в чат
         try_send_to_user(user_id, msg_text)
         send_message(GROUP_CHAT_ID, chat_msg)
+        # Обновляем пост
+        if training:
+            update_training_post(training)
         del user_states[user_id]
         return {"ok": True}
 
@@ -338,8 +402,14 @@ async def webhook(req: Request):
         edit_states[user_id] = {"training_id": training_id, "step": "choose_field"}
         send_message(user_id,
             "Что меняем?\n"
-            "1 — Дата\n2 — Время\n3 — Место\n4 — Направления\n"
-            "5 — Тренеры\n6 — Места\n7 — Цена\n8 — Доп.инфо"
+            "1 — Дата\n"
+            "2 — Время\n"
+            "3 — Место\n"
+            "4 — Направления\n"
+            "5 — Тренеры\n"
+            "6 — Места\n"
+            "7 — Цена\n"
+            "8 — Доп.инфо"
         )
         return {"ok": True}
 
@@ -376,20 +446,45 @@ async def webhook(req: Request):
                          "5": "coaches", "6": "max_slots", "7": "price", "8": "extra"}
             if text in field_map:
                 state["field"] = field_map[text]
-                prompts = {
-                    "date": "📅 Новая дата:",
-                    "time": "🕐 Новое время (20:45-21:45):",
-                    "place": "📍 Новое место (или 1-Олимп, 2-Айсберг, 3-Десант, 4-своё):",
-                    "direction": "🎯 Новые направления (1-5 или текст через запятую):",
-                    "coaches": "👤 Новые тренеры:",
-                    "max_slots": "👥 Новое макс. количество:",
-                    "price": "💰 Новая цена:",
-                    "extra": "ℹ️ Новая доп.информация:"
-                }
-                state["step"] = "edit_value"
-                send_message(user_id, prompts[state["field"]])
+                if text == "2":  # Время — спрашиваем начало
+                    state["step"] = "edit_time_start"
+                    send_message(user_id, "🕐 Новое время НАЧАЛА (20:45):")
+                else:
+                    prompts = {
+                        "date": "📅 Новая дата:",
+                        "place": "📍 Новое место (или 1 — Олимпийский, 2 — Айсберг, 3 — Десант, 4 — Своё):",
+                        "direction": "🎯 Новые направления (1-5 или текст через запятую):\n"
+                                     "1 — Клюшка\n2 — Катание\n3 — Бросок\n4 — ОФП\n5 — Скор-силовая",
+                        "coaches": "👤 Новые тренеры:",
+                        "max_slots": "👥 Новое макс. количество:",
+                        "price": "💰 Новая цена:",
+                        "extra": "ℹ️ Новая доп.информация:"
+                    }
+                    state["step"] = "edit_value"
+                    send_message(user_id, prompts[state["field"]])
             else:
                 send_message(user_id, "Выбери 1-8")
+            return {"ok": True}
+
+        elif step == "edit_time_start":
+            if ":" not in text:
+                send_message(user_id, "❌ Формат: 20:45")
+                return {"ok": True}
+            edit_time_start[user_id] = text
+            state["step"] = "edit_time_end"
+            send_message(user_id, "🕐 Новое время КОНЦА (21:45):")
+            return {"ok": True}
+
+        elif step == "edit_time_end":
+            if ":" not in text:
+                send_message(user_id, "❌ Формат: 21:45")
+                return {"ok": True}
+            start = edit_time_start.pop(user_id, "")
+            training.time = f"{start}-{text}"
+            db.commit()
+            update_training_post(training)
+            send_message(user_id, f"✅ Время обновлено: {training.time}")
+            del edit_states[user_id]
             return {"ok": True}
 
         elif step == "edit_value":
@@ -408,10 +503,7 @@ async def webhook(req: Request):
             else:
                 setattr(training, field, text)
             db.commit()
-
-            post = build_training_post(training)
-            kb = training_inline_buttons(training.id)
-            send_message(GROUP_CHAT_ID, "🔄 Тренировка обновлена:\n" + post, kb)
+            update_training_post(training)
             send_message(user_id, f"✅ Поле '{field}' обновлено!")
             del edit_states[user_id]
             return {"ok": True}
@@ -420,7 +512,7 @@ async def webhook(req: Request):
     if user_id in user_states:
         state = user_states[user_id]
         step = state.get("step", "")
-        if step in ("ask_lastname",):
+        if step in ("ask_lastname_in_chat",):
             return {"ok": True}
 
         if not is_trainer(user_id):
@@ -453,13 +545,27 @@ async def webhook(req: Request):
                     return {"ok": True}
                 state["time_end"] = text
                 state["step"] = "place"
-                send_message(user_id, "📍 Место:\n1-Олимпийский, 2-Айсберг, 3-Десант, 4-Свой вариант")
+                send_message(user_id,
+                    "📍 Место:\n"
+                    "1 — Олимпийский\n"
+                    "2 — Айсберг\n"
+                    "3 — Десант\n"
+                    "4 — Свой вариант"
+                )
 
             elif step == "place":
                 if text in PLACES:
                     state["place"] = PLACES[text]
                     state["step"] = "direction"
-                    send_message(user_id, "🎯 Направления (через запятую):\n1-Клюшка, 2-Катание, 3-Бросок, 4-ОФП, 5-Скор-силовая\nИли свой текст")
+                    send_message(user_id,
+                        "🎯 Направления (через запятую):\n"
+                        "1 — Клюшка\n"
+                        "2 — Катание\n"
+                        "3 — Бросок\n"
+                        "4 — ОФП\n"
+                        "5 — Скор-силовая\n"
+                        "Или свой текст"
+                    )
                 elif text == "4":
                     state["step"] = "place_custom"
                     send_message(user_id, "📍 Своё место:")
@@ -470,7 +576,15 @@ async def webhook(req: Request):
             elif step == "place_custom":
                 state["place"] = text
                 state["step"] = "direction"
-                send_message(user_id, "🎯 Направления (через запятую):\n1-Клюшка, 2-Катание, 3-Бросок, 4-ОФП, 5-Скор-силовая\nИли свой текст")
+                send_message(user_id,
+                    "🎯 Направления (через запятую):\n"
+                    "1 — Клюшка\n"
+                    "2 — Катание\n"
+                    "3 — Бросок\n"
+                    "4 — ОФП\n"
+                    "5 — Скор-силовая\n"
+                    "Или свой текст"
+                )
 
             elif step == "direction":
                 parts = [x.strip() for x in text.split(",") if x.strip()]
@@ -521,13 +635,9 @@ async def webhook(req: Request):
                 kb = training_inline_buttons(training.id)
                 resp = send_message(GROUP_CHAT_ID, post, kb)
 
-                if isinstance(resp, dict):
-                    msg_id = resp.get("message", {}).get("message_id")
-                    if msg_id:
-                        training.group_msg_id = str(msg_id)
-                        db.commit()
-                else:
-                    print(f"ERROR sending to chat: {resp}")
+                if isinstance(resp, dict) and resp.get("message"):
+                    training.group_msg_id = resp["message"]["body"]["mid"]
+                    db.commit()
 
                 trainer_kb = trainer_training_buttons(training.id)
                 send_message(user_id, f"✅ Тренировка #{training.id} создана!", trainer_kb)
@@ -538,6 +648,7 @@ async def webhook(req: Request):
             send_message(user_id, f"❌ Ошибка: {e}")
             user_states.pop(user_id, None)
             edit_states.pop(user_id, None)
+            edit_time_start.pop(user_id, None)
 
         return {"ok": True}
 
