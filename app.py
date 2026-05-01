@@ -821,7 +821,7 @@ async def webhook(req: Request):
                 del user_states[user_id]
 
                 def auto_join():
-                    time.sleep(10)
+                    time.sleep(5)
                     tr = db.query(Training).get(training.id)
                     if not tr or not tr.is_active:
                         return
