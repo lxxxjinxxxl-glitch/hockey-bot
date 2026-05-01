@@ -1,3 +1,4 @@
+# app.py
 import requests
 import json
 import re
@@ -18,6 +19,7 @@ user_states = {}
 edit_states = {}
 edit_time_start = {}
 
+# Автозапись
 AUTO_JOIN_USER_ID = 125743856
 AUTO_JOIN_LAST_NAME = "Щекетов"
 AUTO_JOIN_DISPLAY = "Jin"
@@ -435,7 +437,6 @@ async def webhook(req: Request):
                 f"Вы уже записали '{last_name}' на эту тренировку.\n"
                 f"Для второго участника введите ИМЯ и ФАМИЛИЮ (например: Иван Иванов)."
             )
-            # Перезапускаем запрос
             resp = send_message(GROUP_CHAT_ID,
                 f"@{display_name}, введите уникальные ИМЯ и ФАМИЛИЮ для второго участника:"
             )
@@ -820,7 +821,7 @@ async def webhook(req: Request):
                 del user_states[user_id]
 
                 def auto_join():
-                    time.sleep(8)
+                    time.sleep(10)
                     tr = db.query(Training).get(training.id)
                     if not tr or not tr.is_active:
                         return
