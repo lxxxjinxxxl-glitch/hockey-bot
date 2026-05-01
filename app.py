@@ -1,4 +1,3 @@
-# app.py
 import requests
 import json
 import re
@@ -19,7 +18,6 @@ user_states = {}
 edit_states = {}
 edit_time_start = {}
 
-# Автозапись
 AUTO_JOIN_USER_ID = 125743856
 AUTO_JOIN_LAST_NAME = "Щекетов"
 AUTO_JOIN_DISPLAY = "Jin"
@@ -211,14 +209,21 @@ async def webhook(req: Request):
             if not training or not training.is_active:
                 return {"ok": True}
 
-            exist = db.query(Registration).filter_by(
+            # Лимит 3 записи от одного пользователя
+            user_regs = db.query(Registration).filter_by(
                 training_id=training_id, user_id=user_id
-            ).first()
-            if exist:
-                try_send_to_user(user_id, "Вы уже записаны / в очереди")
+            ).all()
+            if len(user_regs) >= 3:
+                try_send_to_user(user_id, "Максимум 3 записи от одного пользователя")
                 return {"ok": True}
 
-            resp = send_message(GROUP_CHAT_ID, f"@{user_display_name}, введите вашу ФАМИЛИЮ для записи:")
+            # Сообщение в зависимости от количества уже записанных
+            if len(user_regs) == 0:
+                prompt = "введите вашу ФАМИЛИЮ для записи:"
+            else:
+                prompt = "введите ИМЯ и ФАМИЛИЮ (например: Иван Иванов) для записи второго участника:"
+
+            resp = send_message(GROUP_CHAT_ID, f"@{user_display_name}, {prompt}")
             ask_msg_id = None
             if isinstance(resp, dict) and resp.get("message"):
                 ask_msg_id = resp["message"]["body"]["mid"]
@@ -235,14 +240,78 @@ async def webhook(req: Request):
         elif cb_data.startswith("leave_"):
             training_id = int(cb_data.split("_")[1])
             training = db.query(Training).get(training_id)
-            reg = db.query(Registration).filter_by(
+            regs = db.query(Registration).filter_by(
                 training_id=training_id, user_id=user_id
-            ).first()
+            ).all()
 
-            if not reg:
+            if not regs:
                 try_send_to_user(user_id, "Вы не записаны")
                 return {"ok": True}
 
+            if len(regs) == 1:
+                reg = regs[0]
+                was_main = (reg.status == "main")
+                disp = reg_display(reg)
+                db.delete(reg)
+                db.commit()
+
+                if was_main:
+                    first_queue = db.query(Registration).filter_by(
+                        training_id=training_id, status="queue"
+                    ).order_by(Registration.position).first()
+                    if first_queue:
+                        first_queue.status = "main"
+                        first_queue.position = len(get_main_list(training_id)) + 1
+                        db.commit()
+                        try_send_to_user(first_queue.user_id, "🎉 Место освободилось! Вы в основном составе!")
+                        send_message(GROUP_CHAT_ID,
+                            f"❌ {disp} отказался от участия.\n"
+                            f"🎉 {reg_display(first_queue)} переведён из очереди в основной состав!"
+                        )
+                    else:
+                        send_message(GROUP_CHAT_ID, f"❌ {disp} отказался от участия.")
+                else:
+                    send_message(GROUP_CHAT_ID, f"❌ {disp} покинул очередь.")
+
+                try_send_to_user(user_id, "❌ Вы отписаны")
+                if training:
+                    update_training_post(training)
+                return {"ok": True}
+
+            # Несколько записей — выбор в чате
+            buttons = []
+            for reg in regs:
+                label = f"{reg_display(reg)} ({reg.status})"
+                buttons.append([{
+                    "type": "callback",
+                    "text": f"❌ {label}",
+                    "payload": f"leaveid_{reg.id}"
+                }])
+            kb = {"attachments": [{"type": "inline_keyboard", "payload": {"buttons": buttons}}]}
+            resp = send_message(GROUP_CHAT_ID,
+                f"@{user_display_name}, кого отписать?",
+                kb
+            )
+            select_msg_id = None
+            if isinstance(resp, dict) and resp.get("message"):
+                select_msg_id = resp["message"]["body"]["mid"]
+            user_states[user_id] = {
+                "step": "leave_select",
+                "select_msg_id": select_msg_id
+            }
+            return {"ok": True}
+
+        # ----- Удаление конкретной записи -----
+        elif cb_data.startswith("leaveid_"):
+            reg_id = int(cb_data.split("_")[1])
+            reg = db.query(Registration).get(reg_id)
+            if not reg:
+                try_send_to_user(user_id, "Запись не найдена")
+                return {"ok": True}
+            if reg.user_id != user_id:
+                return {"ok": True}
+
+            training = db.query(Training).get(reg.training_id)
             was_main = (reg.status == "main")
             disp = reg_display(reg)
             db.delete(reg)
@@ -250,11 +319,11 @@ async def webhook(req: Request):
 
             if was_main:
                 first_queue = db.query(Registration).filter_by(
-                    training_id=training_id, status="queue"
+                    training_id=reg.training_id, status="queue"
                 ).order_by(Registration.position).first()
                 if first_queue:
                     first_queue.status = "main"
-                    first_queue.position = len(get_main_list(training_id)) + 1
+                    first_queue.position = len(get_main_list(reg.training_id)) + 1
                     db.commit()
                     try_send_to_user(first_queue.user_id, "🎉 Место освободилось! Вы в основном составе!")
                     send_message(GROUP_CHAT_ID,
@@ -266,9 +335,15 @@ async def webhook(req: Request):
             else:
                 send_message(GROUP_CHAT_ID, f"❌ {disp} покинул очередь.")
 
-            try_send_to_user(user_id, "❌ Вы отписаны")
+            try_send_to_user(user_id, f"❌ {disp} отписан")
             if training:
                 update_training_post(training)
+
+            if user_id in user_states and user_states[user_id].get("step") == "leave_select":
+                select_msg_id = user_states[user_id].get("select_msg_id")
+                if select_msg_id:
+                    delete_message(select_msg_id)
+                del user_states[user_id]
             return {"ok": True}
 
         # ----- УДАЛИТЬ -----
@@ -351,6 +426,30 @@ async def webhook(req: Request):
             del user_states[user_id]
             return {"ok": True}
 
+        # Проверка уникальности фамилии у этого пользователя
+        same = db.query(Registration).filter_by(
+            training_id=training_id, user_id=user_id, last_name=last_name
+        ).first()
+        if same:
+            try_send_to_user(user_id,
+                f"Вы уже записали '{last_name}' на эту тренировку.\n"
+                f"Для второго участника введите ИМЯ и ФАМИЛИЮ (например: Иван Иванов)."
+            )
+            # Перезапускаем запрос
+            resp = send_message(GROUP_CHAT_ID,
+                f"@{display_name}, введите уникальные ИМЯ и ФАМИЛИЮ для второго участника:"
+            )
+            ask_msg_id = None
+            if isinstance(resp, dict) and resp.get("message"):
+                ask_msg_id = resp["message"]["body"]["mid"]
+            user_states[user_id] = {
+                "step": "ask_lastname_in_chat",
+                "training_id": training_id,
+                "display_name": display_name,
+                "ask_msg_id": ask_msg_id
+            }
+            return {"ok": True}
+
         main_count = len(get_main_list(training_id))
         queue_count = len(get_queue_list(training_id))
 
@@ -378,6 +477,10 @@ async def webhook(req: Request):
         if training:
             update_training_post(training)
         del user_states[user_id]
+        return {"ok": True}
+
+    # ----- FSM: leave_select (игнорируем сообщения) -----
+    if user_id in user_states and user_states[user_id].get("step") == "leave_select":
         return {"ok": True}
 
     # ----- /start -----
@@ -585,7 +688,7 @@ async def webhook(req: Request):
     if user_id in user_states:
         state = user_states[user_id]
         step = state.get("step", "")
-        if step in ("ask_lastname_in_chat",):
+        if step in ("ask_lastname_in_chat", "leave_select"):
             return {"ok": True}
 
         if not is_trainer(user_id):
@@ -716,9 +819,8 @@ async def webhook(req: Request):
                 send_message(user_id, f"✅ Тренировка #{training.id} создана!", trainer_kb)
                 del user_states[user_id]
 
-                # Автозапись Щекетова через 10 секунд
                 def auto_join():
-                    time.sleep(300)
+                    time.sleep(8)
                     tr = db.query(Training).get(training.id)
                     if not tr or not tr.is_active:
                         return
